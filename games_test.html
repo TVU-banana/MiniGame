@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>直播间弹道对战 - 修复版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: 'Arial', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; color: white; }
+        
+        #game-container {
+            width: 100%;
+            max-width: 414px;
+            height: 100%;
+            max-height: 896px;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA); /* 更自然的天空 */
+            position: relative;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+
+        canvas { display: block; width: 100%; height: 100%; }
+
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        .top-bar { position: absolute; top: 10px; width: 100%; display: flex; justify-content: center; align-items: center; }
+        .wind-indicator { background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px; font-size: 14px; display: flex; gap: 10px; border: 1px solid rgba(255,255,255,0.3); }
+        .timer { font-size: 24px; font-weight: bold; color: #ffcc00; margin-left: 15px; text-shadow: 1px 1px 2px black; }
+
+        .player-list { position: absolute; top: 60px; left: 10px; display: flex; flex-direction: column; gap: 15px; }
+        .avatar-box { width: 50px; height: 50px; border-radius: 50%; border: 2px solid white; position: relative; background: #333; overflow: hidden; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); transition: transform 0.2s; }
+        .avatar-img { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; font-size: 20px; font-weight: bold; }
+        .hp-bar-vertical { position: absolute; right: -8px; top: 0; width: 6px; height: 50px; background: #444; border-radius: 3px; }
+        .hp-fill { width: 100%; background: #00ff00; position: absolute; bottom: 0; transition: height 0.3s; }
+        .active-turn { border-color: #ffcc00; box-shadow: 0 0 10px #ffcc00; transform: scale(1.1); }
+
+        .controls { position: absolute; bottom: 20px; width: 100%; height: 160px; pointer-events: auto; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 10px; box-sizing: border-box; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); }
+        
+        .aim-wheel { width: 100px; height: 100px; background: rgba(255,255,255,0.1); border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); position: relative; margin-bottom: 20px; touch-action: none; }
+        .aim-knob { width: 30px; height: 30px; background: white; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 5px black; }
+        .angle-text { position: absolute; top: -25px; width: 100%; text-align: center; font-size: 14px; color: #fff; text-shadow: 1px 1px 2px black; }
+
+        .fire-btn { width: 90px; height: 90px; border-radius: 50%; background: radial-gradient(circle, #ff5f6d, #ffc371); border: 4px solid rgba(255,255,255,0.5); display: flex; justify-content: center; align-items: center; font-weight: bold; font-size: 18px; margin-bottom: 20px; user-select: none; touch-action: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5); transition: transform 0.1s; }
+        .fire-btn:active { transform: scale(0.95); background: radial-gradient(circle, #ff0000, #aa0000); }
+        .fire-btn.charging { animation: shake 0.1s infinite; background: radial-gradient(circle, #ff0000, #550000); border-color: #ffcc00; }
+
+        .items-bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding-bottom: 25px; gap: 8px; }
+        .gift-btn { background: rgba(0,0,0,0.6); border: 1px solid #aaa; color: #fff; padding: 5px 10px; border-radius: 5px; font-size: 10px; width: 80px; text-align: center; cursor: pointer; transition: 0.2s; }
+        .gift-btn:hover { background: #ffcc00; color: #000; }
+        .gift-label { font-size: 10px; color: #aaa; margin-bottom: 5px; text-shadow: 1px 1px 1px black; }
+
+        .toast { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 15px 30px; border-radius: 30px; font-size: 16px; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 10; text-align: center; border: 1px solid #ffcc00; white-space: nowrap; }
+
+        @keyframes shake { 0% { transform: translate(1px, 1px); } 20% { transform: translate(-3px, 0px); } 40% { transform: translate(1px, -1px); } 100% { transform: translate(0, 0); } }
+
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="ui-layer">
+        <div class="top-bar">
+            <div class="wind-indicator">
+                <span>🌬 风力: <span id="wind-val">0.0</span></span>
+            </div>
+            <div class="timer" id="turn-timer">30</div>
+        </div>
+
+        <div class="player-list">
+            <div class="avatar-box active-turn" id="p1-avatar">
+                <div class="avatar-img" style="background: #ff5f6d;">A</div>
+                <div class="hp-bar-vertical"><div class="hp-fill" id="p1-hp" style="height: 100%"></div></div>
+            </div>
+            <div class="avatar-box" id="p2-avatar">
+                <div class="avatar-img" style="background: #1488cc;">B</div>
+                <div class="hp-bar-vertical"><div class="hp-fill" id="p2-hp" style="height: 100%"></div></div>
+            </div>
+        </div>
+
+        <div class="toast" id="toast-msg"></div>
+
+        <div class="controls">
+            <div class="aim-wheel" id="aim-wheel">
+                <div class="angle-text"><span id="angle-display">45</span>°</div>
+                <div class="aim-knob" id="aim-knob"></div>
+            </div>
+
+            <div class="items-bar">
+                <div class="gift-label">观众互动(模拟)</div>
+                <div class="gift-btn" onclick="triggerGift('radar')">📡 全景扫描</div>
+                <div class="gift-btn" onclick="triggerGift('storm')">🌪 强风干扰</div>
+                <div class="gift-btn" onclick="triggerGift('bomb')">💣 地毯轰炸</div>
+            </div>
+
+            <div class="fire-btn" id="fire-btn">蓄力</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // --- 游戏常量配置 ---
+    const MAP_WIDTH = 2500;
+    const SEA_LEVEL = 1200; // 海平面高度
+    const GRAVITY = 0.5;
+    const TERRAIN_THICKNESS = 350; // 地形厚度
+    
+    let width, height;
+    function resize() {
+        const container = document.getElementById('game-container');
+        width = container.clientWidth;
+        height = container.clientHeight;
+        canvas.width = width * 2; 
+        canvas.height = height * 2;
+        ctx.scale(2, 2);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const STATE = { IDLE: 0, CHARGING: 1, FIRING: 2, RESOLVING: 3, GAME_OVER: 4 };
+    let currentState = STATE.IDLE;
+
+    const camera = {
+        x: 0, y: 0, zoom: 1.2,
+        targetX: 0, targetY: 0, targetZoom: 1.2,
+        isRadarActive: false
+    };
+
+    // 地形数据: 存储地表的Y坐标
+    const terrain = new Float32Array(MAP_WIDTH);
+    function generateTerrain() {
+        // 生成地形，确保在海平面之上
+        let baseHeight = SEA_LEVEL - 500; 
+        for (let x = 0; x < MAP_WIDTH; x++) {
+            const noise = Math.sin(x * 0.005) * 60 + Math.sin(x * 0.02) * 20;
+            terrain[x] = baseHeight + noise;
+        }
+    }
+    generateTerrain();
+
+    // 玩家数据增加 physics
+    const players = [
+        { id: 1, x: 400, y: 0, hp: 100, color: '#ff5f6d', angle: 45, power: 0, name: 'Red', vy: 0, falling: true },
+        { id: 2, x: 1600, y: 0, hp: 100, color: '#1488cc', angle: 135, power: 0, name: 'Blue', vy: 0, falling: true }
+    ];
+    let currentPlayerIndex = 0;
+    let wind = (Math.random() - 0.5) * 2;
+    let projectile = null;
+    let particles = []; // 粒子效果（爆炸、水花）
+
+    // 放置玩家在地形上
+    function placePlayers() {
+        players.forEach(p => {
+            p.y = terrain[Math.floor(p.x)] - 25;
+            p.falling = false;
+        });
+        camera.targetX = players[currentPlayerIndex].x;
+        camera.targetY = players[currentPlayerIndex].y - 100;
+    }
+    placePlayers();
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+    
+    function update() {
+        const activeP = players[currentPlayerIndex];
+
+        // 1. 摄像机逻辑 (修复：更智能的跟随)
+        let targetCamX, targetCamY, targetZoom;
+
+        if (camera.isRadarActive) {
+            targetCamX = MAP_WIDTH / 2;
+            targetCamY = SEA_LEVEL - 300;
+            targetZoom = width / MAP_WIDTH * 1.5;
+        } else if (currentState === STATE.FIRING && projectile) {
+            // 紧跟炮弹
+            targetCamX = projectile.x;
+            targetCamY = projectile.y;
+            targetZoom = 1.0;
+        } else if (currentState === STATE.RESOLVING) {
+            // 结算阶段：如果有玩家在掉落，盯着掉落的玩家
+            const fallingPlayer = players.find(p => p.falling && p.hp > 0);
+            if (fallingPlayer) {
+                targetCamX = fallingPlayer.x;
+                targetCamY = fallingPlayer.y;
+            } else {
+                // 否则盯着上一发炮弹的落点或当前玩家
+                targetCamX = camera.x; // 保持不动或缓慢回归
+                targetCamY = camera.y;
+            }
+            targetZoom = 1.0;
+        } else {
+            // 默认：盯着操作者
+            targetCamX = activeP.x;
+            targetCamY = activeP.y - 150; // 稍微往上看一点
+            targetZoom = 1.2;
+        }
+
+        // 摄像机平滑
+        camera.x += (targetCamX - camera.x) * 0.1;
+        camera.y += (targetCamY - camera.y) * 0.1;
+        camera.zoom += (targetZoom - camera.zoom) * 0.05;
+
+        // 2. 蓄力逻辑
+        if (isCharging) {
+            const duration = Date.now() - chargeStartTime;
+            let p = Math.min(duration / 2000, 1);
+            activeP.power = p * 25 + 5;
+            document.getElementById('fire-btn').style.background = `radial-gradient(circle, #ff${Math.floor(255*(1-p))}${Math.floor(255*(1-p))}, #aa0000)`;
+            document.getElementById('fire-btn').innerText = Math.floor(p*100) + "%";
+        }
+
+        // 3. 炮弹物理
+        if (projectile) {
+            projectile.vy += GRAVITY;
+            projectile.vx += wind * 0.05;
+            projectile.x += projectile.vx;
+            projectile.y += projectile.vy;
+
+            // 边界/死亡判定
+            if (projectile.x < -100 || projectile.x > MAP_WIDTH + 100) {
+                projectile = null;
+                currentState = STATE.RESOLVING;
+            }
+            // 落海
+            else if (projectile.y > SEA_LEVEL) {
+                createSplash(projectile.x, SEA_LEVEL);
+                projectile = null;
+                currentState = STATE.RESOLVING;
+            }
+            // 撞地
+            else if (projectile.x > 0 && projectile.x < MAP_WIDTH) {
+                const groundY = terrain[Math.floor(projectile.x)];
+                if (projectile.y >= groundY) {
+                    explode(projectile.x, projectile.y, 50);
+                    projectile = null;
+                    currentState = STATE.RESOLVING;
+                }
+            }
+        }
+
+        // 4. 玩家物理 (修复：重力、地形厚度、落海)
+        let anyMoving = false;
+        players.forEach(p => {
+            if (p.hp <= 0 && p.y > SEA_LEVEL) return; // 已死且沉底
+
+            // X轴限制
+            if (p.x < 0) p.x = 0;
+            if (p.x >= MAP_WIDTH) p.x = MAP_WIDTH - 1;
+
+            const groundY = terrain[Math.floor(p.x)];
+            
+            // 判定是否悬空：玩家Y < 地面Y (注意Canvas坐标系Y向下增大)
+            // 这里的 "20" 是半个身位
+            if (p.y < groundY - 20) {
+                p.falling = true;
+            } else if (p.y >= groundY - 20 && groundY < SEA_LEVEL + 100) {
+                // 在地面上
+                if (p.falling) {
+                    p.y = groundY - 20; // 修正位置
+                    p.vy = 0;
+                    p.falling = false;
+                }
+            } else {
+                // 地形被炸穿了 (groundY 很大)
+                p.falling = true;
+            }
+
+            // 应用重力
+            if (p.falling) {
+                anyMoving = true;
+                p.vy += GRAVITY;
+                p.y += p.vy;
+
+                // 落海判定
+                if (p.y > SEA_LEVEL) {
+                    if (p.hp > 0) {
+                        p.hp = 0;
+                        createSplash(p.x, SEA_LEVEL);
+                        showToast(p.name + " 落海身亡!");
+                        updateUI();
+                        checkWin();
+                    }
+                }
+            }
+        });
+
+        // 5. 自动回合结束检测
+        if (currentState === STATE.RESOLVING && !projectile && !anyMoving && particles.length === 0) {
+            // 稍微延迟一下，给视觉缓冲
+            if (!window.turnTimeout) {
+                window.turnTimeout = setTimeout(() => {
+                    endTurn();
+                    window.turnTimeout = null;
+                }, 1000);
+            }
+        }
+    }
+
+    function draw() {
+        // 天空背景
+        const grad = ctx.createLinearGradient(0, 0, 0, height);
+        grad.addColorStop(0, '#87CEEB'); // 蓝天
+        grad.addColorStop(1, '#E0F7FA'); 
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+        
+        ctx.save();
+        
+        // 摄像机应用
+        ctx.translate(width/2, height/2);
+        ctx.scale(camera.zoom, camera.zoom);
+        ctx.translate(-camera.x, -camera.y);
+
+        // 1. 绘制大海 (修复：底层背景)
+        ctx.fillStyle = '#1E88E5';
+        ctx.fillRect(-500, SEA_LEVEL, MAP_WIDTH + 1000, 1000);
+        // 波浪线
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.beginPath();
+        for(let i=-500; i<MAP_WIDTH+1000; i+=50) {
+            ctx.moveTo(i, SEA_LEVEL);
+            ctx.lineTo(i+25, SEA_LEVEL+10);
+        }
+        ctx.stroke();
+
+        // 2. 绘制地形 (修复：带厚度的浮岛)
+        ctx.beginPath();
+        ctx.moveTo(0, SEA_LEVEL + 500); // 从下方开始
+        for (let x = 0; x < MAP_WIDTH; x++) {
+            // 如果地形被炸到了海面以下，就不画表面了（视觉穿透）
+            let y = terrain[x];
+            if (y > SEA_LEVEL) y = SEA_LEVEL + 500; 
+            ctx.lineTo(x, y);
+        }
+        ctx.lineTo(MAP_WIDTH, SEA_LEVEL + 500);
+        ctx.closePath();
+        
+        const terrainGrad = ctx.createLinearGradient(0, SEA_LEVEL-600, 0, SEA_LEVEL);
+        terrainGrad.addColorStop(0, '#7CB342'); // 草地
+        terrainGrad.addColorStop(0.2, '#5D4037'); // 泥土
+        terrainGrad.addColorStop(1, '#3E2723'); // 深层土
+        ctx.fillStyle = terrainGrad;
+        ctx.fill();
+        
+        // 绘制下层边缘 (厚度感)
+        ctx.beginPath();
+        for (let x = 0; x < MAP_WIDTH; x+=10) {
+            let y = terrain[x];
+            if (y < SEA_LEVEL) {
+                ctx.moveTo(x, y);
+                ctx.lineTo(x, Math.min(y + TERRAIN_THICKNESS, SEA_LEVEL));
+            }
+        }
+        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+        ctx.stroke();
+
+        // 3. 辅助线
+        if (currentState === STATE.IDLE || currentState === STATE.CHARGING) {
+            drawTrajectory();
+        }
+
+        // 4. 玩家
+        players.forEach((p, idx) => {
+            if (p.hp <= 0 && p.y > SEA_LEVEL) return; // 死在海里的不画
+            
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            
+            // 身体
+            ctx.fillStyle = p.color;
+            ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
+            
+            // 炮筒
+            ctx.strokeStyle = '#333'; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.moveTo(0, 0);
+            const r = p.angle * (Math.PI / 180);
+            ctx.lineTo(Math.cos(-r) * 25, Math.sin(-r) * 25); ctx.stroke();
+            
+            // 修复：头顶血条
+            if (p.hp > 0) {
+                ctx.fillStyle = '#555';
+                ctx.fillRect(-20, -35, 40, 6);
+                ctx.fillStyle = p.hp > 30 ? '#00ff00' : '#ff0000';
+                ctx.fillRect(-20, -35, 40 * (p.hp/100), 6);
+            }
+
+            // 当前回合指示箭头
+            if (idx === currentPlayerIndex && currentState === STATE.IDLE) {
+                ctx.fillStyle = '#ffcc00';
+                ctx.beginPath();
+                ctx.moveTo(0, -45); ctx.lineTo(-6, -55); ctx.lineTo(6, -55);
+                ctx.fill();
+            }
+            ctx.restore();
+        });
+
+        // 5. 炮弹
+        if (projectile) {
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(projectile.x, projectile.y, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#000'; ctx.lineWidth=1; ctx.stroke();
+        }
+
+        // 6. 粒子/特效
+        particles.forEach((pt, i) => {
+            ctx.fillStyle = pt.c;
+            ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2); ctx.fill();
+            pt.x += pt.vx; pt.y += pt.vy;
+            pt.vy += 0.2; // 粒子重力
+            pt.r *= 0.9;
+            if(pt.r < 0.5) particles.splice(i, 1);
+        });
+
+        ctx.restore();
+    }
+
+    function drawTrajectory() {
+        const p = players[currentPlayerIndex];
+        const r = p.angle * (Math.PI / 180);
+        let power = isCharging ? p.power : 15; 
+        let vx = Math.cos(-r) * power;
+        let vy = Math.sin(-r) * power;
+        let tx = p.x; let ty = p.y; 
+
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        for(let i=0; i<25; i++) {
+            vy += GRAVITY; vx += wind * 0.05;
+            tx += vx; ty += vy;
+            ctx.lineTo(tx, ty);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // 爆炸逻辑: 挖坑
+    function explode(x, y, radius) {
+        // 视觉粒子
+        for(let k=0; k<20; k++) {
+            particles.push({
+                x: x, y: y, vx: (Math.random()-0.5)*15, vy: (Math.random()-0.5)*15,
+                r: Math.random()*8 + 2, c: '#ff4400'
+            });
+        }
+
+        // 地形破坏 (增加地形数组的Y值 = 向下挖)
+        const startX = Math.floor(x - radius);
+        const endX = Math.floor(x + radius);
+        
+        for (let i = startX; i <= endX; i++) {
+            if (i >= 0 && i < MAP_WIDTH) {
+                const dist = Math.abs(i - x);
+                if (dist < radius) {
+                    const depth = Math.sqrt(radius*radius - dist*dist);
+                    // 只有当这里还是陆地时才挖
+                    if (terrain[i] < SEA_LEVEL) {
+                        terrain[i] += depth * 1.5; 
+                    }
+                }
+            }
+        }
+
+        // 伤害
+        players.forEach(p => {
+            const dist = Math.hypot(p.x - x, p.y - y);
+            if (dist < radius + 25) {
+                const dmg = Math.floor((radius + 25 - dist));
+                p.hp = Math.max(0, p.hp - dmg);
+                showToast(`${p.name} -${dmg}`);
+                // 击飞
+                p.falling = true;
+                p.vy = -5; // 稍微炸飞
+            }
+        });
+        updateUI();
+        checkWin();
+    }
+
+    function createSplash(x, y) {
+        for(let k=0; k<15; k++) {
+            particles.push({
+                x: x, y: y, vx: (Math.random()-0.5)*8, vy: -Math.random()*10,
+                r: Math.random()*5, c: '#ffffff'
+            });
+        }
+    }
+
+    function fire() {
+        const p = players[currentPlayerIndex];
+        const r = p.angle * (Math.PI / 180);
+        projectile = {
+            x: p.x + Math.cos(-r) * 30,
+            y: p.y + Math.sin(-r) * 30,
+            vx: Math.cos(-r) * p.power,
+            vy: Math.sin(-r) * p.power
+        };
+        currentState = STATE.FIRING;
+    }
+
+    function endTurn() {
+        currentState = STATE.IDLE;
+        if(checkWin()) return;
+
+        currentPlayerIndex = (currentPlayerIndex + 1) % players.length;
+        wind = (Math.random() - 0.5) * 4;
+        updateUI();
+        
+        document.getElementById('p1-avatar').classList.toggle('active-turn');
+        document.getElementById('p2-avatar').classList.toggle('active-turn');
+        showToast(`轮到 ${players[currentPlayerIndex].name} 行动`);
+        
+        camera.isRadarActive = false; 
+    }
+
+    function checkWin() {
+        if(players[0].hp <= 0 && players[1].hp <= 0) {
+            showToast("同归于尽!");
+            currentState = STATE.GAME_OVER; return true;
+        }
+        if(players[0].hp <= 0) {
+            showToast("蓝方获胜!");
+            currentState = STATE.GAME_OVER; return true;
+        }
+        if(players[1].hp <= 0) {
+            showToast("红方获胜!");
+            currentState = STATE.GAME_OVER; return true;
+        }
+        return false;
+    }
+
+    /** 交互与控制 **/
+    const btn = document.getElementById('fire-btn');
+    let chargeStartTime = 0;
+    let isCharging = false;
+    btn.addEventListener('pointerdown', () => {
+        if (currentState !== STATE.IDLE) return;
+        isCharging = true;
+        chargeStartTime = Date.now();
+        btn.classList.add('charging');
+        btn.innerText = "0%";
+    });
+    const releaseFire = () => {
+        if (!isCharging) return;
+        isCharging = false;
+        btn.classList.remove('charging');
+        btn.innerText = "蓄力";
+        btn.style.background = "";
+        fire();
+    };
+    btn.addEventListener('pointerup', releaseFire);
+    btn.addEventListener('pointerleave', releaseFire);
+
+    const wheel = document.getElementById('aim-wheel');
+    const knob = document.getElementById('aim-knob');
+    let isDraggingWheel = false;
+    
+    wheel.addEventListener('pointerdown', (e) => { isDraggingWheel = true; updateWheel(e); });
+    document.addEventListener('pointermove', (e) => { if (isDraggingWheel) updateWheel(e); });
+    document.addEventListener('pointerup', () => { isDraggingWheel = false; });
+
+    function updateWheel(e) {
+        const rect = wheel.getBoundingClientRect();
+        const dx = e.clientX - (rect.left + rect.width / 2);
+        const dy = e.clientY - (rect.top + rect.height / 2);
+        let deg = -Math.atan2(dy, dx) * (180 / Math.PI);
+        if (deg < 0) deg += 360;
+        if (deg > 180) deg = 180; 
+
+        players[currentPlayerIndex].angle = deg;
+        document.getElementById('angle-display').innerText = Math.floor(deg);
+        
+        const r = 35;
+        knob.style.transform = `translate(-50%, -50%) translate(${Math.cos(-deg*Math.PI/180)*r}px, ${Math.sin(-deg*Math.PI/180)*r}px)`;
+    }
+
+    window.triggerGift = function(type) {
+        if (currentState !== STATE.IDLE && currentState !== STATE.CHARGING) return;
+        if (type === 'radar') {
+            camera.isRadarActive = true;
+            showToast("🎁 观众送出 [全景扫描]!");
+            setTimeout(() => { camera.isRadarActive = false; }, 3000);
+        }
+        if (type === 'storm') {
+            wind = (currentPlayerIndex === 0 ? -4 : 4);
+            updateUI();
+            showToast("🎁 观众送出 [强风干扰]!");
+        }
+        if (type === 'bomb') {
+            showToast("🎁 观众送出 [地毯轰炸]!");
+            for(let i=0; i<5; i++) {
+                setTimeout(() => {
+                    explode(Math.random() * MAP_WIDTH, terrain[1000], 40);
+                    currentState = STATE.RESOLVING; // 触发物理结算
+                }, i * 300);
+            }
+        }
+    }
+
+    function updateUI() {
+        document.getElementById('wind-val').innerText = wind.toFixed(1);
+        document.getElementById('p1-hp').style.height = players[0].hp + "%";
+        document.getElementById('p2-hp').style.height = players[1].hp + "%";
+        document.getElementById('angle-display').innerText = Math.floor(players[currentPlayerIndex].angle);
+    }
+    function showToast(msg) {
+        const t = document.getElementById('toast-msg');
+        t.innerText = msg;
+        t.style.opacity = 1;
+        setTimeout(() => t.style.opacity = 0, 2000);
+    }
+
+    // 启动循环
+    loop();
+
+</script>
+</body>
+</html>
