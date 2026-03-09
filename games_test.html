@@ -56,10 +56,14 @@
 </head>
 <body>
 
+<!-- 游戏总容器：限制最大可视区域，模拟手机竖屏画布 -->
 <div id="game-container">
+    <!-- Canvas 负责所有动态渲染（地形、角色、弹道、特效） -->
     <canvas id="gameCanvas"></canvas>
 
+    <!-- UI 层：使用绝对定位叠加在 Canvas 之上 -->
     <div class="ui-layer">
+        <!-- 顶部状态栏：风力与回合计时（计时目前为静态展示） -->
         <div class="top-bar">
             <div class="wind-indicator">
                 <span>🌬 风力: <span id="wind-val">0.0</span></span>
@@ -67,6 +71,7 @@
             <div class="timer" id="turn-timer">30</div>
         </div>
 
+        <!-- 左侧玩家面板：头像 + 血条 + 当前回合高亮 -->
         <div class="player-list">
             <div class="avatar-box active-turn" id="p1-avatar">
                 <div class="avatar-img" style="background: #ff5f6d;">A</div>
@@ -78,8 +83,10 @@
             </div>
         </div>
 
+        <!-- 中央提示：击中伤害、回合切换、胜负提示等 -->
         <div class="toast" id="toast-msg"></div>
 
+        <!-- 底部操控区：左摇杆（角度）+ 中道具 + 右开火 -->
         <div class="controls">
             <div class="aim-wheel" id="aim-wheel">
                 <div class="angle-text"><span id="angle-display">45</span>°</div>
@@ -99,16 +106,25 @@
 </div>
 
 <script>
+    // =========================
+    // 1) 基础对象与常量
+    // =========================
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     
     // --- 游戏常量配置 ---
+    // 地图总宽（世界坐标），远大于屏幕宽，靠摄像机移动观察全图
     const MAP_WIDTH = 2500;
-    const SEA_LEVEL = 1200; // 海平面高度
+    // 海平面高度：大于该值可视作落海区域
+    const SEA_LEVEL = 1200;
+    // 统一重力加速度（玩家和炮弹均受影响）
     const GRAVITY = 0.5;
-    const TERRAIN_THICKNESS = 350; // 地形厚度
+    // 绘制地形下层时的“厚度”视觉参数
+    const TERRAIN_THICKNESS = 350;
     
+    // 视口尺寸（逻辑像素），由容器大小驱动
     let width, height;
+    // 自适应画布尺寸。通过 2x 像素渲染提升清晰度（近似 DPR=2 的效果）
     function resize() {
         const container = document.getElementById('game-container');
         width = container.clientWidth;
@@ -117,20 +133,34 @@
         canvas.height = height * 2;
         ctx.scale(2, 2);
     }
+    // 初始化与窗口变化同步
     resize();
     window.addEventListener('resize', resize);
 
+    // 回合状态机：
+    // IDLE      可操作（可调角度、可蓄力）
+    // CHARGING  正在按住蓄力
+    // FIRING    炮弹飞行中
+    // RESOLVING 命中后物理结算（掉落、特效、延迟结束回合）
+    // GAME_OVER 对局结束
     const STATE = { IDLE: 0, CHARGING: 1, FIRING: 2, RESOLVING: 3, GAME_OVER: 4 };
     let currentState = STATE.IDLE;
 
+    // 摄像机参数：x/y 为中心点，zoom 为缩放
+    // target* 用于平滑过渡，避免镜头瞬移
+    // isRadarActive 道具态，开启后会拉远镜头看全局
     const camera = {
         x: 0, y: 0, zoom: 1.2,
         targetX: 0, targetY: 0, targetZoom: 1.2,
         isRadarActive: false
     };
 
+    // =========================
+    // 2) 世界与实体初始化
+    // =========================
     // 地形数据: 存储地表的Y坐标
     const terrain = new Float32Array(MAP_WIDTH);
+    // 使用双正弦叠加生成起伏地形，便于快速得到“可玩”地貌
     function generateTerrain() {
         // 生成地形，确保在海平面之上
         let baseHeight = SEA_LEVEL - 500; 
@@ -141,17 +171,23 @@
     }
     generateTerrain();
 
-    // 玩家数据增加 physics
+    // 玩家实体数据：
+    // angle: 炮管朝向（角度制）
+    // power: 当前蓄力值
+    // vy/falling: 纵向速度与是否处于坠落态
     const players = [
         { id: 1, x: 400, y: 0, hp: 100, color: '#ff5f6d', angle: 45, power: 0, name: 'Red', vy: 0, falling: true },
         { id: 2, x: 1600, y: 0, hp: 100, color: '#1488cc', angle: 135, power: 0, name: 'Blue', vy: 0, falling: true }
     ];
+    // 当前行动玩家索引（0/1）
     let currentPlayerIndex = 0;
+    // 风力范围初始化在 [-1, 1]，每回合会重置到更大范围
     let wind = (Math.random() - 0.5) * 2;
+    // 炮弹对象：飞行时为对象，未发射/已结算时为 null
     let projectile = null;
     let particles = []; // 粒子效果（爆炸、水花）
 
-    // 放置玩家在地形上
+    // 根据地形把玩家放到地表位置，并初始化镜头目标
     function placePlayers() {
         players.forEach(p => {
             p.y = terrain[Math.floor(p.x)] - 25;
@@ -162,12 +198,17 @@
     }
     placePlayers();
 
+    // =========================
+    // 3) 主循环（更新 + 渲染）
+    // =========================
+    // requestAnimationFrame 驱动的游戏主循环
     function loop() {
         update();
         draw();
         requestAnimationFrame(loop);
     }
     
+    // 逻辑帧更新：不负责绘制，只更新状态
     function update() {
         const activeP = players[currentPlayerIndex];
 
@@ -208,6 +249,7 @@
         camera.zoom += (targetZoom - camera.zoom) * 0.05;
 
         // 2. 蓄力逻辑
+        // 按住时间映射到 [5, 30] 的力度区间（2秒到满）
         if (isCharging) {
             const duration = Date.now() - chargeStartTime;
             let p = Math.min(duration / 2000, 1);
@@ -218,6 +260,7 @@
 
         // 3. 炮弹物理
         if (projectile) {
+            // 欧拉积分：先更新速度，再更新位置
             projectile.vy += GRAVITY;
             projectile.vx += wind * 0.05;
             projectile.x += projectile.vx;
@@ -238,6 +281,7 @@
             else if (projectile.x > 0 && projectile.x < MAP_WIDTH) {
                 const groundY = terrain[Math.floor(projectile.x)];
                 if (projectile.y >= groundY) {
+                    // 命中地面触发爆炸，随后进入结算阶段
                     explode(projectile.x, projectile.y, 50);
                     projectile = null;
                     currentState = STATE.RESOLVING;
@@ -292,6 +336,8 @@
         });
 
         // 5. 自动回合结束检测
+        // 条件：炮弹已消失 + 无玩家移动 + 无粒子残留
+        // 目的：保证“爆炸和坠落视觉”结束后再切换回合，手感更自然
         if (currentState === STATE.RESOLVING && !projectile && !anyMoving && particles.length === 0) {
             // 稍微延迟一下，给视觉缓冲
             if (!window.turnTimeout) {
@@ -303,6 +349,7 @@
         }
     }
 
+    // 渲染帧：按“背景 -> 地形 -> 角色 -> 炮弹 -> 特效”顺序绘制
     function draw() {
         // 天空背景
         const grad = ctx.createLinearGradient(0, 0, 0, height);
@@ -361,7 +408,7 @@
         ctx.strokeStyle = 'rgba(0,0,0,0.1)';
         ctx.stroke();
 
-        // 3. 辅助线
+        // 3. 预瞄辅助线（仅在可瞄准/蓄力时显示）
         if (currentState === STATE.IDLE || currentState === STATE.CHARGING) {
             drawTrajectory();
         }
@@ -408,7 +455,7 @@
             ctx.strokeStyle = '#000'; ctx.lineWidth=1; ctx.stroke();
         }
 
-        // 6. 粒子/特效
+        // 6. 粒子/特效（边渲染边更新，半径逐渐衰减）
         particles.forEach((pt, i) => {
             ctx.fillStyle = pt.c;
             ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2); ctx.fill();
@@ -421,6 +468,8 @@
         ctx.restore();
     }
 
+    // 绘制未来弹道的虚线预测
+    // 注意：这是“近似模拟”，参数与真实炮弹更新保持一致以减少偏差
     function drawTrajectory() {
         const p = players[currentPlayerIndex];
         const r = p.angle * (Math.PI / 180);
@@ -442,7 +491,10 @@
         ctx.setLineDash([]);
     }
 
-    // 爆炸逻辑: 挖坑
+    // 爆炸逻辑：
+    // 1) 生成视觉粒子
+    // 2) 修改地形形成弹坑（可破坏地形）
+    // 3) 计算范围伤害并给玩家击飞效果
     function explode(x, y, radius) {
         // 视觉粒子
         for(let k=0; k<20; k++) {
@@ -452,7 +504,8 @@
             });
         }
 
-        // 地形破坏 (增加地形数组的Y值 = 向下挖)
+        // 地形破坏：增加地表 Y 值代表“往下挖”
+        // 这里采用圆形截面：x 方向按圆方程计算每列深度
         const startX = Math.floor(x - radius);
         const endX = Math.floor(x + radius);
         
@@ -469,7 +522,7 @@
             }
         }
 
-        // 伤害
+        // 伤害：离爆心越近伤害越高
         players.forEach(p => {
             const dist = Math.hypot(p.x - x, p.y - y);
             if (dist < radius + 25) {
@@ -486,6 +539,7 @@
     }
 
     function createSplash(x, y) {
+        // 仅做视觉反馈，不改变地形或伤害
         for(let k=0; k<15; k++) {
             particles.push({
                 x: x, y: y, vx: (Math.random()-0.5)*8, vy: -Math.random()*10,
@@ -494,6 +548,7 @@
         }
     }
 
+    // 根据当前玩家角度与力度生成炮弹初始状态
     function fire() {
         const p = players[currentPlayerIndex];
         const r = p.angle * (Math.PI / 180);
@@ -507,10 +562,13 @@
     }
 
     function endTurn() {
+        // 若已经分出胜负，保持结束状态，不再切人
         currentState = STATE.IDLE;
         if(checkWin()) return;
 
+        // 正常切换到下一个玩家
         currentPlayerIndex = (currentPlayerIndex + 1) % players.length;
+        // 每回合重置风力，增加随机性
         wind = (Math.random() - 0.5) * 4;
         updateUI();
         
@@ -522,6 +580,7 @@
     }
 
     function checkWin() {
+        // 双败优先判定，避免覆盖单方胜利提示
         if(players[0].hp <= 0 && players[1].hp <= 0) {
             showToast("同归于尽!");
             currentState = STATE.GAME_OVER; return true;
@@ -537,10 +596,13 @@
         return false;
     }
 
-    /** 交互与控制 **/
+    // =========================
+    // 4) 输入交互（触控/鼠标统一为 Pointer 事件）
+    // =========================
     const btn = document.getElementById('fire-btn');
     let chargeStartTime = 0;
     let isCharging = false;
+    // 按下开火键：进入蓄力态
     btn.addEventListener('pointerdown', () => {
         if (currentState !== STATE.IDLE) return;
         isCharging = true;
@@ -548,6 +610,7 @@
         btn.classList.add('charging');
         btn.innerText = "0%";
     });
+    // 松开/移出开火键：结束蓄力并立刻发射
     const releaseFire = () => {
         if (!isCharging) return;
         isCharging = false;
@@ -563,16 +626,20 @@
     const knob = document.getElementById('aim-knob');
     let isDraggingWheel = false;
     
+    // 角度盘拖拽：
+    // pointerdown 开始拖动，move 实时更新角度，pointerup 结束拖动
     wheel.addEventListener('pointerdown', (e) => { isDraggingWheel = true; updateWheel(e); });
     document.addEventListener('pointermove', (e) => { if (isDraggingWheel) updateWheel(e); });
     document.addEventListener('pointerup', () => { isDraggingWheel = false; });
 
+    // 将指针位置映射成角度，并同步到玩家炮管与UI摇杆
     function updateWheel(e) {
         const rect = wheel.getBoundingClientRect();
         const dx = e.clientX - (rect.left + rect.width / 2);
         const dy = e.clientY - (rect.top + rect.height / 2);
         let deg = -Math.atan2(dy, dx) * (180 / Math.PI);
         if (deg < 0) deg += 360;
+        // 仅允许上半圆射击，避免朝地底反向发射
         if (deg > 180) deg = 180; 
 
         players[currentPlayerIndex].angle = deg;
@@ -582,19 +649,26 @@
         knob.style.transform = `translate(-50%, -50%) translate(${Math.cos(-deg*Math.PI/180)*r}px, ${Math.sin(-deg*Math.PI/180)*r}px)`;
     }
 
+    // =========================
+    // 5) 道具系统（模拟直播间礼物）
+    // =========================
     window.triggerGift = function(type) {
+        // 非可操作阶段不接受道具，避免和结算冲突
         if (currentState !== STATE.IDLE && currentState !== STATE.CHARGING) return;
         if (type === 'radar') {
+            // 全景扫描：短时拉远镜头观察战场全貌
             camera.isRadarActive = true;
             showToast("🎁 观众送出 [全景扫描]!");
             setTimeout(() => { camera.isRadarActive = false; }, 3000);
         }
         if (type === 'storm') {
+            // 强风干扰：按当前回合方向施加极端风
             wind = (currentPlayerIndex === 0 ? -4 : 4);
             updateUI();
             showToast("🎁 观众送出 [强风干扰]!");
         }
         if (type === 'bomb') {
+            // 地毯轰炸：连续随机爆炸，强制进入结算
             showToast("🎁 观众送出 [地毯轰炸]!");
             for(let i=0; i<5; i++) {
                 setTimeout(() => {
@@ -605,12 +679,15 @@
         }
     }
 
+    // UI 同步：风力、两侧竖血条、角度文本
     function updateUI() {
         document.getElementById('wind-val').innerText = wind.toFixed(1);
         document.getElementById('p1-hp').style.height = players[0].hp + "%";
         document.getElementById('p2-hp').style.height = players[1].hp + "%";
         document.getElementById('angle-display').innerText = Math.floor(players[currentPlayerIndex].angle);
     }
+
+    // 弹窗提示：统一入口，2 秒后自动淡出
     function showToast(msg) {
         const t = document.getElementById('toast-msg');
         t.innerText = msg;
