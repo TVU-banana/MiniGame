@@ -76,6 +76,7 @@ export class GameController {
     const group = this.listeners.get(eventName) ?? new Set<Listener<GameControllerEvents[TKey]>>();
     group.add(listener);
     this.listeners.set(eventName, group as Set<Listener<any>>);
+
     return () => {
       group.delete(listener);
       if (group.size === 0) {
@@ -89,6 +90,7 @@ export class GameController {
     const generated = this.levelGenerator.generate(dimensions);
     const blocks = this.directionAssigner.assignDirections(generated, dimensions);
     const removableCount = this.moveValidator.countRemovableBlocks(blocks, dimensions);
+
     this.dimensions = dimensions;
     this.runtime = {
       levelId,
@@ -103,7 +105,7 @@ export class GameController {
     };
     this.tickStartedAt = performance.now();
 
-    const snapshot = this.getRuntimeOrThrow();
+    const snapshot = this.cloneRuntime();
     this.emit('levelLoaded', { levelId, dimensions, blocks: snapshot.blocks, runtime: snapshot });
     this.emit('runtimeChanged', snapshot);
     this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
@@ -122,7 +124,7 @@ export class GameController {
       return;
     }
 
-    this.runtime.elapsedMs = now - this.tickStartedAt;
+    this.runtime.elapsedMs = Math.max(0, now - this.tickStartedAt);
     this.emit('runtimeChanged', this.cloneRuntime());
   }
 
@@ -130,6 +132,7 @@ export class GameController {
     if (!this.runtime) {
       return;
     }
+
     this.runtime.elapsedMs = elapsedMs;
     this.tickStartedAt = performance.now() - elapsedMs;
   }
@@ -174,18 +177,19 @@ export class GameController {
 
   applyReverse(blockId: string): LevelRuntime | null {
     const runtime = this.getRuntimeOrThrow();
-    if (runtime.reverseRemaining <= 0) {
+    if (runtime.reverseRemaining <= 0 || !this.dimensions) {
       return null;
     }
 
     const block = runtime.blocks.find((entry) => entry.id === blockId && !entry.removed);
-    if (!block || !this.dimensions) {
+    if (!block) {
       return null;
     }
 
     block.direction = this.directionAssigner.reverseDirection(block.direction);
     runtime.reverseRemaining -= 1;
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+
     const snapshot = this.cloneRuntime();
     this.emit('directionsChanged', { blocks: snapshot.blocks });
     this.emit('runtimeChanged', snapshot);
@@ -200,20 +204,24 @@ export class GameController {
       return null;
     }
 
-    const activeBlocks = runtime.blocks.map((block) => ({ ...block }));
-    const updated = this.directionAssigner.assignDirections(activeBlocks, this.dimensions);
-    const byId = new Map(updated.map((block) => [block.id, block.direction]));
+    const clonedBlocks = runtime.blocks.map((block) => ({ ...block }));
+    const reassigned = this.directionAssigner.assignDirections(clonedBlocks, this.dimensions);
+    const nextDirections = new Map(reassigned.map((block) => [block.id, block.direction]));
+
     for (const block of runtime.blocks) {
-      const nextDirection = byId.get(block.id);
+      const nextDirection = nextDirections.get(block.id);
       if (nextDirection) {
         block.direction = nextDirection;
       }
     }
+
     runtime.resetRemaining -= 1;
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+
     const snapshot = this.cloneRuntime();
     this.emit('directionsChanged', { blocks: snapshot.blocks });
     this.emit('runtimeChanged', snapshot);
+    this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
     this.checkFailure();
     return snapshot;
   }
@@ -229,15 +237,16 @@ export class GameController {
       return;
     }
 
-    if (removable) {
+    if (removable && !block.removed) {
       block.removed = true;
       runtime.removedCount += 1;
     }
 
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+
     const snapshot = this.cloneRuntime();
-    this.emit('blockAnimationFinished', { blockId, removable });
     this.emit('runtimeChanged', snapshot);
+    this.emit('blockAnimationFinished', { blockId, removable });
 
     if (runtime.removedCount === runtime.totalBlocks) {
       this.handleSuccess();
@@ -259,9 +268,10 @@ export class GameController {
   private handleSuccess(): void {
     const runtime = this.getRuntimeOrThrow();
     const nextLevel = getNextLevel(runtime.levelId);
+
     if (nextLevel !== null) {
-      const unlocked = this.historyStore.loadUnlockedLevel();
-      if (nextLevel > unlocked) {
+      const unlockedLevel = this.historyStore.loadUnlockedLevel();
+      if (nextLevel > unlockedLevel) {
         this.historyStore.saveUnlockedLevel(nextLevel);
       }
     }
@@ -272,8 +282,8 @@ export class GameController {
       runtime: this.cloneRuntime(),
       record,
       nextLevel,
-      message: '恭喜你挑战成功，你这空间能力真是没谁了！',
-      starsText: `${record.stars} 星`,
+      message: '恭喜通关，整座滑块塔已经被你拆空了。',
+      starsText: `${record.stars} 星评价`,
     });
   }
 
@@ -299,7 +309,7 @@ export class GameController {
     this.emit('levelFailed', {
       runtime: this.cloneRuntime(),
       record,
-      message: '很遗憾，你失败了…… 本局已无可操作空间且反向、重置次数都已耗尽。',
+      message: '已经没有可滑出的方块，而且反向与重置次数也耗尽了。',
     });
   }
 
@@ -335,6 +345,7 @@ export class GameController {
     if (!group) {
       return;
     }
+
     for (const listener of group) {
       listener(payload);
     }
@@ -342,7 +353,7 @@ export class GameController {
 
   private getRuntimeOrThrow(): LevelRuntime {
     if (!this.runtime) {
-      throw new Error('当前没有进行中的关卡');
+      throw new Error('当前没有进行中的关卡。');
     }
     return this.runtime;
   }
