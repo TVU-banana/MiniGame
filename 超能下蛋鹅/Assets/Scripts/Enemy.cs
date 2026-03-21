@@ -20,7 +20,7 @@ public class Enemy : MonoBehaviour
 
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        if (collision.gameObject.CompareTag("Player"))
+        if (collision.gameObject.CompareTag("Egg"))
         {
             TakeDamage(2);
             
@@ -46,5 +46,10 @@ public class Enemy : MonoBehaviour
         {
             hpText.text = currentHP.ToString();
         }
+    }
+
+    public int GetCurrentHP()
+    {
+        return currentHP;
     }
 }
