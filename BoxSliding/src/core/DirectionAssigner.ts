@@ -10,8 +10,9 @@ export class DirectionAssigner {
   assignDirections(blocks: BlockData[], dimensions: LevelDimensions): BlockData[] {
     let bestBlocks = blocks.map((block) => ({ ...block, direction: randomItem(ALL_DIRECTIONS) }));
     let bestScore = this.moveValidator.countRemovableBlocks(bestBlocks, dimensions);
+    const attemptLimit = this.getAttemptLimit(blocks.length);
 
-    for (let attempt = 0; attempt < 48; attempt += 1) {
+    for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const next = blocks.map((block) => ({ ...block, direction: randomItem(ALL_DIRECTIONS) }));
       const removableCount = this.moveValidator.countRemovableBlocks(next, dimensions);
       if (removableCount >= 3) {
@@ -61,6 +62,19 @@ export class DirectionAssigner {
     }
 
     return next;
+  }
+
+  private getAttemptLimit(blockCount: number): number {
+    if (blockCount >= 120) {
+      return 16;
+    }
+    if (blockCount >= 80) {
+      return 24;
+    }
+    if (blockCount >= 54) {
+      return 32;
+    }
+    return 48;
   }
 
   private getOutwardDirections(block: BlockData, dimensions: LevelDimensions): AxisDirection[] {

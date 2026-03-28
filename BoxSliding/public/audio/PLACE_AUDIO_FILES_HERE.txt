@@ -1,0 +1,19 @@
+把自定义音频文件放到这个目录：`public/audio/`
+
+BGM 文件名：
+- `menu-bgm.mp3`
+- `game-bgm.mp3`
+
+音效文件名：
+- `button-sfx.mp3`
+- `slide-sfx.mp3`
+- `blocked-sfx.mp3`
+- `success-sfx.mp3`
+- `fail-sfx.mp3`
+
+说明：
+- 文件存在时，游戏会优先使用这些外部音频。
+- 文件不存在或加载失败时，会自动回退到内置合成 BGM / 音效。
+- BGM 现在会优先读取 `.mp3`，同时兼容旧的 `.mp4` 文件名。
+- 音效现在也会优先读取 `.mp3`，同时兼容旧的 `.mp4` 文件名。
+- BGM 仍会在循环时做首尾淡入淡出处理。

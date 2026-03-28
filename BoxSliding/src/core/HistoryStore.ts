@@ -51,7 +51,7 @@ export class HistoryStore {
 
   saveRun(record: RunRecord): RunRecord[] {
     const current = this.loadRuns();
-    const next = [record, ...current].slice(0, 10);
+    const next = [record, ...current].slice(0, 60);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
     return next;
   }

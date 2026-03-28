@@ -7,7 +7,11 @@ import { LevelGenerator } from './LevelGenerator';
 import { MoveValidator, directionToVector, type MoveCheckResult } from './MoveValidator';
 import { HistoryStore } from './HistoryStore';
 
-const EXTRA_TOOL_COST = 100;
+export const EXTRA_TOOL_COSTS = {
+  reverse: 1000,
+  reset: 1500,
+  clear: 2000,
+} as const;
 
 export interface BlockActionRequest {
   block: BlockData;
@@ -65,15 +69,10 @@ type Listener<T> = (payload: T) => void;
 
 export class GameController {
   private runtime: LevelRuntime | null = null;
-
   private dimensions: LevelDimensions | null = null;
-
   private tickStartedAt = 0;
-
   private levelResolved = false;
-
   private coins: number;
-
   private readonly listeners = new Map<keyof GameControllerEvents, Set<Listener<any>>>();
 
   constructor(
@@ -150,7 +149,7 @@ export class GameController {
     if (this.runtime.timeLimitMs !== null && this.runtime.elapsedMs >= this.runtime.timeLimitMs) {
       this.runtime.elapsedMs = this.runtime.timeLimitMs;
       this.emit('runtimeChanged', this.cloneRuntime());
-      this.handleFailure('倒计时结束，本次挑战失败。');
+      this.handleFailure('倒计时结束，挑战失败。');
       return;
     }
 
@@ -187,6 +186,9 @@ export class GameController {
   }
 
   toggleReverseSelection(active: boolean): void {
+    if (this.levelResolved) {
+      return;
+    }
     const runtime = this.getRuntimeOrThrow();
     this.emit('reverseStateChanged', { active, remaining: runtime.reverseRemaining });
   }
@@ -241,12 +243,19 @@ export class GameController {
   }
 
   applyReset(): LevelRuntime | null {
+    if (this.levelResolved) {
+      return null;
+    }
     const result = this.applyResetInternal(true);
     this.resolveStalemateIfNeeded();
     return result;
   }
 
   armClearMode(): boolean {
+    if (this.levelResolved) {
+      return false;
+    }
+
     const runtime = this.getRuntimeOrThrow();
     if (runtime.clearChargesRemaining <= 0) {
       return false;
@@ -277,16 +286,18 @@ export class GameController {
       runtime.removedCount += 1;
       runtime.coinsEarned += 10;
       this.addCoins(10);
+      runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+      this.emit('runtimeChanged', this.cloneRuntime());
     }
 
-    runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
-
-    const snapshot = this.cloneRuntime();
-    this.emit('runtimeChanged', snapshot);
     this.emit('blockAnimationFinished', {
       blockId,
       kind: removable ? 'slide' : 'blocked',
     });
+
+    if (!removable) {
+      return;
+    }
 
     if (runtime.removedCount === runtime.totalBlocks) {
       this.handleSuccess();
@@ -327,8 +338,13 @@ export class GameController {
     this.resolveStalemateIfNeeded();
   }
 
-  purchaseExtra(kind: 'reverse' | 'reset'): boolean {
-    if (this.coins < EXTRA_TOOL_COST) {
+  purchaseExtra(kind: 'reverse' | 'reset' | 'clear'): boolean {
+    if (this.levelResolved) {
+      return false;
+    }
+
+    const cost = EXTRA_TOOL_COSTS[kind];
+    if (this.coins < cost) {
       this.emit('notice', {
         message: '金币不足，无法购买额外次数。',
         tone: 'warning',
@@ -337,23 +353,31 @@ export class GameController {
     }
 
     const runtime = this.getRuntimeOrThrow();
-    this.addCoins(-EXTRA_TOOL_COST);
+    this.addCoins(-cost);
 
     if (kind === 'reverse') {
       runtime.reverseRemaining += 1;
-    } else {
+    } else if (kind === 'reset') {
       runtime.resetRemaining += 1;
+    } else {
+      runtime.clearChargesRemaining += 1;
     }
 
     this.emit('runtimeChanged', this.cloneRuntime());
     this.emit('notice', {
-      message: `消耗 ${EXTRA_TOOL_COST} 金币，补充了 1 次${kind === 'reverse' ? '反向' : '重置'}。`,
+      message: `已花费 ${cost} 金币，购买 1 次${
+        kind === 'reverse' ? '反向' : kind === 'reset' ? '重置' : '消块'
+      }。`,
       tone: 'info',
     });
     return true;
   }
 
-  private applyResetInternal(consumeCharge: boolean): LevelRuntime | null {
+  private applyResetInternal(consumeCharge: boolean, emitUpdates = true): LevelRuntime | null {
+    if (this.levelResolved) {
+      return null;
+    }
+
     const runtime = this.getRuntimeOrThrow();
     if (!this.dimensions) {
       return null;
@@ -381,9 +405,11 @@ export class GameController {
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
 
     const snapshot = this.cloneRuntime();
-    this.emit('directionsChanged', { blocks: snapshot.blocks });
-    this.emit('runtimeChanged', snapshot);
-    this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
+    if (emitUpdates) {
+      this.emit('directionsChanged', { blocks: snapshot.blocks });
+      this.emit('runtimeChanged', snapshot);
+      this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
+    }
     return snapshot;
   }
 
@@ -398,10 +424,14 @@ export class GameController {
       return;
     }
 
-    for (let attempt = 0; attempt < 32; attempt += 1) {
-      this.applyResetInternal(false);
-      runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
-      if (runtime.removableCount > 0) {
+    const attemptLimit = this.getAutoResetAttemptLimit(runtime.totalBlocks);
+
+    for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
+      const snapshot = this.applyResetInternal(false, false);
+      if (snapshot && runtime.removableCount > 0) {
+        this.emit('directionsChanged', { blocks: snapshot.blocks });
+        this.emit('runtimeChanged', snapshot);
+        this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
         this.emit('notice', {
           message: '无块可消，自动重置',
           tone: 'info',
@@ -410,7 +440,20 @@ export class GameController {
       }
     }
 
-    this.handleFailure('当前局面无法继续推进。');
+    this.handleFailure('当前局面已锁死，系统仍未找到可继续的方向。');
+  }
+
+  private getAutoResetAttemptLimit(totalBlocks: number): number {
+    if (totalBlocks >= 120) {
+      return 6;
+    }
+    if (totalBlocks >= 80) {
+      return 8;
+    }
+    if (totalBlocks >= 54) {
+      return 10;
+    }
+    return 12;
   }
 
   private handleSuccess(): void {
@@ -420,7 +463,7 @@ export class GameController {
     runtime.coinsEarned += 100;
     this.addCoins(100);
 
-    if (nextLevel !== null) {
+    if (runtime.mode === 'challenge' && nextLevel !== null) {
       const unlockedLevel = this.historyStore.loadUnlockedLevel();
       if (nextLevel > unlockedLevel) {
         this.historyStore.saveUnlockedLevel(nextLevel);
@@ -436,8 +479,8 @@ export class GameController {
       nextLevel,
       message:
         runtime.mode === 'challenge'
-          ? '挑战成功，当前关卡已在倒计时结束前完成。'
-          : '通关成功，整座滑块塔已经被你拆空了。',
+          ? '挑战成功，在倒计时结束前完成了清空。'
+          : '本关已通关，继续挑战下一关吧。',
     });
   }
 
@@ -467,10 +510,7 @@ export class GameController {
       finishedAt: toIsoNow(),
       result,
       elapsedSeconds,
-      stars:
-        result === 'success' && runtime.mode === 'endless'
-          ? this.resolveStars(elapsedSeconds)
-          : 0,
+      stars: result === 'success' && runtime.mode === 'endless' ? this.resolveStars(elapsedSeconds) : 0,
       earnedCoins: runtime.coinsEarned,
     };
   }
@@ -507,7 +547,7 @@ export class GameController {
 
   private getRuntimeOrThrow(): LevelRuntime {
     if (!this.runtime) {
-      throw new Error('当前没有进行中的关卡。');
+      throw new Error('当前没有正在进行的关卡。');
     }
     return this.runtime;
   }

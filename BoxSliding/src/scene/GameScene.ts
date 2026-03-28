@@ -239,6 +239,8 @@ export class GameScene {
         continue;
       }
 
+      const previous = visual.block;
+      const directionChanged = previous.direction !== block.direction;
       visual.block = { ...block };
       visual.group.position.copy(this.getWorldPosition(block));
       visual.group.scale.setScalar(1);
@@ -253,7 +255,9 @@ export class GameScene {
       }
 
       this.setGroupOpacity(visual.group, 1);
-      this.rebuildDecals(visual, block.direction);
+      if (directionChanged) {
+        this.rebuildDecals(visual, block.direction);
+      }
     }
 
     this.invalidate();

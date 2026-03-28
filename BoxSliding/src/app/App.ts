@@ -1,16 +1,16 @@
 import type { AudioSettings } from '../audio/AudioManager';
 import { AudioManager } from '../audio/AudioManager';
-import type { InteractionState, LevelRuntime, ScreenState } from './GameState';
 import { DirectionAssigner } from '../core/DirectionAssigner';
-import { GameController } from '../core/GameController';
+import { EXTRA_TOOL_COSTS, GameController } from '../core/GameController';
 import { HistoryStore } from '../core/HistoryStore';
 import { LevelGenerator } from '../core/LevelGenerator';
 import type { GameMode, LevelId, RunRecord } from '../core/BlockModel';
 import { LEVEL_IDS, LEVEL_SPECS } from '../core/LevelConfig';
 import { MoveValidator } from '../core/MoveValidator';
 import { GameScene } from '../scene/GameScene';
-import { formatElapsed } from '../utils/time';
+import type { InteractionState, LevelRuntime, ScreenState } from './GameState';
 import { APP_TEMPLATE } from './template';
+import { formatElapsed } from '../utils/time';
 
 interface ResultState {
   success: boolean;
@@ -19,7 +19,7 @@ interface ResultState {
   record: RunRecord;
 }
 
-type AppModal = 'none' | 'settings' | 'achievements' | 'level-select' | 'result';
+type AppModal = 'none' | 'settings' | 'achievements' | 'coins' | 'level-select' | 'result';
 type ToolMode = 'reverse' | null;
 
 declare global {
@@ -37,7 +37,8 @@ const must = <T extends Element>(value: T | null, message: string): T => {
 };
 
 const formatModeLabel = (mode: GameMode): string => (mode === 'challenge' ? '挑战模式' : '不限时模式');
-const formatResultLabel = (record: RunRecord): string => (record.result === 'success' ? '成功' : '失败');
+const formatResultLabel = (record: RunRecord): string => (record.result === 'success' ? '通关' : '失败');
+
 const formatDateTime = (value: string): string =>
   new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
@@ -45,6 +46,12 @@ const formatDateTime = (value: string): string =>
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+
+const formatRecordDuration = (seconds: number): string => {
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  return `${String(minutes).padStart(2, '0')}m${String(remainSeconds).padStart(2, '0')}s`;
+};
 
 const isLevelId = (value: string | undefined): value is `${LevelId}` =>
   value === '1' || value === '2' || value === '3' || value === '4' || value === '5' || value === '6';
@@ -57,6 +64,52 @@ const pickRandomBlockIds = (runtime: LevelRuntime, count: number): string[] => {
   }
   return candidates.slice(0, Math.min(count, candidates.length));
 };
+
+const getBestChallengeCampaignTime = (history: RunRecord[]): number | null => {
+  const challengeRuns = [...history]
+    .filter((record) => record.mode === 'challenge')
+    .sort((left, right) => new Date(left.finishedAt).getTime() - new Date(right.finishedAt).getTime());
+
+  let expectedLevel: LevelId = 1;
+  let currentTotal = 0;
+  let bestTotal: number | null = null;
+
+  for (const record of challengeRuns) {
+    if (record.result !== 'success') {
+      expectedLevel = 1;
+      currentTotal = 0;
+      continue;
+    }
+
+    if (record.level === 1) {
+      expectedLevel = 2;
+      currentTotal = record.elapsedSeconds;
+      continue;
+    }
+
+    if (record.level !== expectedLevel) {
+      expectedLevel = 1;
+      currentTotal = 0;
+      continue;
+    }
+
+    currentTotal += record.elapsedSeconds;
+
+    if (record.level === 6) {
+      bestTotal = bestTotal === null ? currentTotal : Math.min(bestTotal, currentTotal);
+      expectedLevel = 1;
+      currentTotal = 0;
+      continue;
+    }
+
+    expectedLevel = (record.level + 1) as LevelId;
+  }
+
+  return bestTotal;
+};
+
+const getToolPurchaseLabel = (remaining: number, cost: number, coins: number): string =>
+  remaining > 0 ? `${remaining} 次` : coins >= cost ? `${cost} 金币购买 1 次` : '金币不足';
 
 export class App {
   private readonly audio = new AudioManager();
@@ -74,6 +127,7 @@ export class App {
   private readonly modalRoot: HTMLDivElement;
   private readonly settingsPanel: HTMLDivElement;
   private readonly achievementsPanel: HTMLDivElement;
+  private readonly coinsPanel: HTMLDivElement;
   private readonly levelSelectPanel: HTMLDivElement;
   private readonly resultPanel: HTMLDivElement;
   private readonly menuCoinsValue: HTMLSpanElement;
@@ -106,6 +160,7 @@ export class App {
   private readonly nextLevelButton: HTMLButtonElement;
   private readonly settingsRestartButton: HTMLButtonElement;
   private readonly settingsExitButton: HTMLButtonElement;
+  private readonly menuRecordSummary: HTMLParagraphElement;
   private readonly toast: HTMLDivElement;
 
   private screenState: ScreenState = 'MENU';
@@ -129,8 +184,15 @@ export class App {
     this.sceneHost = must(this.root.querySelector('.scene-host'), 'missing scene host');
     this.modalRoot = must(this.root.querySelector('.modal-root'), 'missing modal root');
     this.settingsPanel = must(this.root.querySelector('[data-panel="settings"]'), 'missing settings panel');
-    this.achievementsPanel = must(this.root.querySelector('[data-panel="achievements"]'), 'missing achievements panel');
-    this.levelSelectPanel = must(this.root.querySelector('[data-panel="level-select"]'), 'missing level select panel');
+    this.achievementsPanel = must(
+      this.root.querySelector('[data-panel="achievements"]'),
+      'missing achievements panel',
+    );
+    this.coinsPanel = must(this.root.querySelector('[data-panel="coins"]'), 'missing coins panel');
+    this.levelSelectPanel = must(
+      this.root.querySelector('[data-panel="level-select"]'),
+      'missing level select panel',
+    );
     this.resultPanel = must(this.root.querySelector('[data-panel="result"]'), 'missing result panel');
     this.menuCoinsValue = must(this.root.querySelector('[data-role="menu-coins"]'), 'missing menu coins');
     this.gameCoinsValue = must(this.root.querySelector('[data-role="game-coins"]'), 'missing game coins');
@@ -151,17 +213,42 @@ export class App {
     this.sfxSlider = must(this.root.querySelector('[data-role="sfx-slider"]'), 'missing sfx slider');
     this.bgmLabel = must(this.root.querySelector('[data-role="bgm-label"]'), 'missing bgm label');
     this.sfxLabel = must(this.root.querySelector('[data-role="sfx-label"]'), 'missing sfx label');
-    this.achievementsList = must(this.root.querySelector('[data-role="achievements-list"]'), 'missing achievements list');
-    this.levelSelectTitle = must(this.root.querySelector('[data-role="level-select-title"]'), 'missing level select title');
-    this.levelSelectList = must(this.root.querySelector('[data-role="level-select-list"]'), 'missing level select list');
+    this.achievementsList = must(
+      this.root.querySelector('[data-role="achievements-list"]'),
+      'missing achievements list',
+    );
+    this.levelSelectTitle = must(
+      this.root.querySelector('[data-role="level-select-title"]'),
+      'missing level select title',
+    );
+    this.levelSelectList = must(
+      this.root.querySelector('[data-role="level-select-list"]'),
+      'missing level select list',
+    );
     this.resultTitle = must(this.root.querySelector('[data-role="result-title"]'), 'missing result title');
-    this.resultMessage = must(this.root.querySelector('[data-role="result-message"]'), 'missing result message');
+    this.resultMessage = must(
+      this.root.querySelector('[data-role="result-message"]'),
+      'missing result message',
+    );
     this.resultMeta = must(this.root.querySelector('[data-role="result-meta"]'), 'missing result meta');
     this.resultReward = must(this.root.querySelector('[data-role="result-reward"]'), 'missing result reward');
     this.resultStars = must(this.root.querySelector('[data-role="result-stars"]'), 'missing result stars');
-    this.nextLevelButton = must(this.root.querySelector('[data-action="result-next"]'), 'missing next level button');
-    this.settingsRestartButton = must(this.root.querySelector('[data-action="settings-restart"]'), 'missing restart button');
-    this.settingsExitButton = must(this.root.querySelector('[data-action="settings-exit"]'), 'missing exit button');
+    this.nextLevelButton = must(
+      this.root.querySelector('[data-action="result-next"]'),
+      'missing next level button',
+    );
+    this.settingsRestartButton = must(
+      this.root.querySelector('[data-action="settings-restart"]'),
+      'missing restart button',
+    );
+    this.settingsExitButton = must(
+      this.root.querySelector('[data-action="settings-exit"]'),
+      'missing exit button',
+    );
+    this.menuRecordSummary = must(
+      this.root.querySelector('[data-role="record-summary"]'),
+      'missing record summary',
+    );
     this.toast = must(this.root.querySelector('[data-role="toast"]'), 'missing toast');
 
     this.scene = new GameScene(this.sceneHost, {
@@ -201,6 +288,9 @@ export class App {
           break;
         case 'open-achievements':
           this.openModal('achievements');
+          break;
+        case 'open-coins':
+          this.openModal('coins');
           break;
         case 'start-endless':
           this.openLevelSelect('endless');
@@ -244,6 +334,7 @@ export class App {
     this.bgmSlider.addEventListener('input', () => {
       this.applyAudioSettings(this.audio.setSettings({ bgmVolume: Number(this.bgmSlider.value) }));
     });
+
     this.sfxSlider.addEventListener('input', () => {
       this.applyAudioSettings(this.audio.setSettings({ sfxVolume: Number(this.sfxSlider.value) }));
     });
@@ -280,7 +371,6 @@ export class App {
     this.controller.on('coinsChanged', ({ total }) => {
       this.updateCoins(total);
       this.renderResult();
-      this.renderLevelSelect();
     });
 
     this.controller.on('notice', ({ message }) => {
@@ -297,8 +387,8 @@ export class App {
       this.updateToolButtons();
     });
 
-    this.controller.on('blockAnimationFinished', () => {
-      if (this.runtime) {
+    this.controller.on('blockAnimationFinished', ({ kind }) => {
+      if (this.runtime && kind !== 'blocked') {
         this.scene.syncBlocks(this.runtime.blocks);
       }
     });
@@ -337,10 +427,16 @@ export class App {
   }
 
   private selectLevel(levelId: LevelId): void {
-    if (levelId > this.unlockedLevel || !this.pendingMode) {
-      this.showToast(levelId > this.unlockedLevel ? '该关卡尚未解锁。' : '请先选择模式。');
+    if (!this.pendingMode) {
+      this.showToast('当前没有可进入的模式。');
       return;
     }
+
+    if (this.pendingMode === 'challenge' && levelId > this.unlockedLevel) {
+      this.showToast('挑战模式需要按顺序解锁，未解锁关卡暂时不能进入。');
+      return;
+    }
+
     this.startLevel(levelId, this.pendingMode);
   }
 
@@ -359,6 +455,7 @@ export class App {
     if (!this.runtime) {
       return;
     }
+
     this.toolMode = null;
     this.resultState = null;
     this.pendingMode = this.runtime.mode;
@@ -385,37 +482,62 @@ export class App {
     this.audio.startMenuBgm();
   }
 
+  private canUseToolActions(): boolean {
+    return (
+      !!this.runtime &&
+      this.screenState === 'LEVEL_RUNNING' &&
+      this.activeModal === 'none' &&
+      !this.animationLocked &&
+      !this.resultState
+    );
+  }
+
   private toggleReverseMode(): void {
-    if (!this.runtime || this.animationLocked) {
+    if (!this.canUseToolActions() || !this.runtime) {
       return;
     }
+
     if (this.toolMode === 'reverse') {
       this.controller.toggleReverseSelection(false);
-      this.showToast('已退出反向选择。');
+      this.showToast('已退出反向模式。');
       return;
     }
+
     if (this.runtime.reverseRemaining <= 0 && !this.controller.purchaseExtra('reverse')) {
       return;
     }
+
     this.controller.toggleReverseSelection(true);
-    this.showToast('请选择一个方块，将它的方向翻转。');
+    this.showToast('请选择一个滑块来反转方向。');
   }
 
   private async activateClearMode(): Promise<void> {
-    if (!this.runtime || this.animationLocked) {
+    if (!this.canUseToolActions() || !this.runtime) {
       return;
     }
+
     if (this.toolMode === 'reverse') {
       this.controller.toggleReverseSelection(false);
     }
+
+    if (this.runtime.clearChargesRemaining <= 0) {
+      if (!this.controller.purchaseExtra('clear')) {
+        return;
+      }
+      this.runtime = this.controller.getRuntime();
+      if (!this.runtime) {
+        return;
+      }
+    }
+
     if (!this.controller.armClearMode()) {
-      this.showToast('消块次数已用完。');
+      this.showToast('消块次数已经用完。');
       return;
     }
 
     const targetBlockIds = pickRandomBlockIds(this.runtime, 3);
     if (targetBlockIds.length === 0) {
-      this.showToast('当前没有可消除的方块。');
+      this.showToast('当前没有可以消除的滑块。');
       return;
     }
 
@@ -430,20 +552,22 @@ export class App {
 
     this.animationLocked = false;
     this.updateToolButtons();
-    this.showToast(`随机消除了 ${targetBlockIds.length} 个方块。`);
+    this.showToast(`随机消除了 ${targetBlockIds.length} 个滑块。`);
   }
 
   private applyReset(): void {
-    if (!this.runtime || this.animationLocked) {
+    if (!this.canUseToolActions() || !this.runtime) {
       return;
     }
+
     if (this.runtime.resetRemaining <= 0 && !this.controller.purchaseExtra('reset')) {
       return;
     }
+
     this.toolMode = null;
     this.controller.toggleReverseSelection(false);
     this.controller.applyReset();
-    this.showToast('本局方向已重新分配。');
+    this.showToast('方向已重新洗牌。');
   }
 
   private async handleBlockSelection(blockId: string): Promise<void> {
@@ -459,7 +583,7 @@ export class App {
 
     if (this.toolMode === 'reverse') {
       this.controller.applyReverse(blockId);
-      this.showToast('方块方向已翻转。');
+      this.showToast('已反转该滑块的方向。');
       return;
     }
 
@@ -475,56 +599,50 @@ export class App {
         ? formatElapsed(Math.max(0, runtime.timeLimitMs - runtime.elapsedMs))
         : formatElapsed(runtime.elapsedMs);
     this.timerHint.textContent =
-      runtime.mode === 'challenge' ? '挑战模式 · 剩余时间' : '不限时模式 · 已用时间';
+      runtime.mode === 'challenge' ? '挑战模式 · 倒计时' : '不限时模式 · 累计用时';
     this.modeBadge.textContent = `${formatModeLabel(runtime.mode)} · LEVEL ${runtime.levelId}`;
     this.remainValue.textContent = `剩余 ${remaining} 块`;
     this.progressValue.textContent = `${runtime.removedCount} / ${runtime.totalBlocks}`;
     this.progressFill.style.width = `${Math.round(progress * 100)}%`;
-    this.reverseMeta.textContent =
-      runtime.reverseRemaining > 0 ? `${runtime.reverseRemaining} 次` : this.coins >= 100 ? '100 金币补 1 次' : '金币不足';
-    this.clearMeta.textContent = runtime.clearChargesRemaining > 0 ? '随机消除 3 块' : '已用完';
-    this.resetMeta.textContent =
-      runtime.resetRemaining > 0 ? `${runtime.resetRemaining} 次` : this.coins >= 100 ? '100 金币补 1 次' : '金币不足';
+    this.reverseMeta.textContent = getToolPurchaseLabel(
+      runtime.reverseRemaining,
+      EXTRA_TOOL_COSTS.reverse,
+      this.coins,
+    );
+    this.clearMeta.textContent = getToolPurchaseLabel(runtime.clearChargesRemaining, EXTRA_TOOL_COSTS.clear, this.coins);
+    this.resetMeta.textContent = getToolPurchaseLabel(runtime.resetRemaining, EXTRA_TOOL_COSTS.reset, this.coins);
     this.hintValue.textContent =
       this.toolMode === 'reverse'
-        ? '反向模式中，请点击一个方块翻转它的滑动方向。'
+        ? '反向模式已激活，点击一个滑块来改变移动方向。'
         : runtime.mode === 'challenge'
-          ? '在倒计时结束前清空所有方块即可过关。'
-          : '观察箭头方向，优先拆出可以直接滑出的方块。';
+          ? '挑战模式按顺序解锁，但已通过关卡仍可随时访问，并记录最快通关时间。'
+          : '不限时模式可自由选关，适合观察结构和练习拆解顺序。';
   }
 
   private updateToolButtons(): void {
     if (!this.runtime) {
       return;
     }
+
+    const toolLocked = !this.canUseToolActions();
     this.reverseButton.dataset.active = String(this.toolMode === 'reverse');
     this.clearButton.dataset.active = 'false';
     this.resetButton.dataset.active = 'false';
-    this.reverseButton.disabled = this.animationLocked;
-    this.clearButton.disabled = this.animationLocked || this.runtime.clearChargesRemaining <= 0;
-    this.resetButton.disabled = this.animationLocked;
+    this.reverseButton.disabled = toolLocked;
+    this.clearButton.disabled =
+      toolLocked || (this.runtime.clearChargesRemaining <= 0 && this.coins < EXTRA_TOOL_COSTS.clear);
+    this.resetButton.disabled = toolLocked;
   }
 
   private openModal(modal: Exclude<AppModal, 'none'>): void {
     this.activeModal = modal;
     this.modalRoot.dataset.open = 'true';
     this.shell.dataset.modalOpen = 'true';
-    this.settingsPanel.hidden = true;
-    this.achievementsPanel.hidden = true;
-    this.levelSelectPanel.hidden = true;
-    this.resultPanel.hidden = true;
-    if (modal === 'settings') {
-      this.settingsPanel.hidden = false;
-    }
-    if (modal === 'achievements') {
-      this.achievementsPanel.hidden = false;
-    }
-    if (modal === 'level-select') {
-      this.levelSelectPanel.hidden = false;
-    }
-    if (modal === 'result') {
-      this.resultPanel.hidden = false;
-    }
+    this.settingsPanel.hidden = modal !== 'settings';
+    this.achievementsPanel.hidden = modal !== 'achievements';
+    this.coinsPanel.hidden = modal !== 'coins';
+    this.levelSelectPanel.hidden = modal !== 'level-select';
+    this.resultPanel.hidden = modal !== 'result';
     this.settingsRestartButton.hidden = this.screenState !== 'LEVEL_RUNNING';
     this.settingsExitButton.hidden = this.screenState !== 'LEVEL_RUNNING';
 
@@ -545,6 +663,7 @@ export class App {
     this.shell.dataset.modalOpen = 'false';
     this.settingsPanel.hidden = true;
     this.achievementsPanel.hidden = true;
+    this.coinsPanel.hidden = true;
     this.levelSelectPanel.hidden = true;
     this.resultPanel.hidden = true;
     this.pendingMode = this.screenState === 'LEVEL_RUNNING' && this.runtime ? this.runtime.mode : null;
@@ -567,11 +686,19 @@ export class App {
     this.unlockedLevel = this.controller.getUnlockedLevel();
     this.renderAchievements();
     this.renderLevelSelect();
+    this.renderMenuRecords();
+  }
+
+  private renderMenuRecords(): void {
+    const bestCampaignTime = getBestChallengeCampaignTime(this.latestHistory);
+    this.menuRecordSummary.innerHTML = `<span class="record-label">最短通关时长</span><span class="record-time">${
+      bestCampaignTime !== null ? formatRecordDuration(bestCampaignTime) : '-- m -- s'
+    }</span>`;
   }
 
   private renderAchievements(): void {
     if (this.latestHistory.length === 0) {
-      this.achievementsList.innerHTML = '<div class="achievement-empty">还没有对局记录，先去挑战一关吧。</div>';
+      this.achievementsList.innerHTML = '<div class="achievement-empty">暂时还没有对局记录。</div>';
       return;
     }
 
@@ -583,9 +710,10 @@ export class App {
             : record.result === 'success'
               ? '挑战通关'
               : '挑战失败';
-        return `<article class="achievement-item"><div class="achievement-row"><strong>Level ${record.level}</strong><span>${formatModeLabel(
-          record.mode,
-        )}</span></div><div class="achievement-row subtle"><span>${formatDateTime(
+
+        return `<article class="achievement-item"><div class="achievement-row"><strong>Level ${
+          record.level
+        }</strong><span>${formatModeLabel(record.mode)}</span></div><div class="achievement-row subtle"><span>${formatDateTime(
           record.startedAt,
         )}</span><span>${formatResultLabel(
           record,
@@ -604,16 +732,23 @@ export class App {
 
     this.levelSelectList.innerHTML = LEVEL_IDS.map((levelId) => {
       const spec = LEVEL_SPECS[levelId];
-      const locked = levelId > this.unlockedLevel;
+      const locked = mode === 'challenge' ? levelId > this.unlockedLevel : false;
+      const stateLabel =
+        mode === 'challenge'
+          ? levelId === this.unlockedLevel
+            ? '当前进度'
+            : levelId < this.unlockedLevel
+              ? '已通关'
+              : '未解锁'
+          : '可直接进入';
       const timeLabel =
-        mode === 'challenge' ? `${Math.round(spec.challengeTimeMs / 1000)} 秒倒计时` : '不限时推进';
+        mode === 'challenge'
+          ? `${Math.round(spec.challengeTimeMs / 1000)} 秒倒计时`
+          : '自由观察，无倒计时';
+
       return `<button class="level-card" data-action="select-level" data-level="${levelId}" ${
         locked ? 'disabled' : ''
-      }><span class="level-card-top"><strong>LEVEL ${levelId}</strong><span class="level-card-state">${
-        locked ? '未解锁' : levelId === this.unlockedLevel ? '当前进度' : '已解锁'
-      }</span></span><span class="level-card-meta">${spec.targetBlocks} 个方块 · ${
-        spec.shape
-      } 结构</span><span class="level-card-meta">${timeLabel}</span></button>`;
+      }><span class="level-card-top"><strong>LEVEL ${levelId}</strong><span class="level-card-state">${stateLabel}</span></span><span class="level-card-meta">${spec.targetBlocks} 块 · ${spec.shape}</span><span class="level-card-meta">${timeLabel}</span></button>`;
     }).join('');
   }
 
@@ -623,7 +758,7 @@ export class App {
     }
 
     const { record, message, nextLevel, success } = this.resultState;
-    this.resultTitle.textContent = success ? '挑战成功' : '挑战失败';
+    this.resultTitle.textContent = success ? '通关成功' : '挑战失败';
     this.resultMessage.textContent = message;
     this.resultMeta.textContent = `Level ${record.level} · ${formatModeLabel(record.mode)} · 用时 ${formatElapsed(
       record.elapsedSeconds * 1000,
@@ -634,7 +769,7 @@ export class App {
         ? [0, 1, 2]
             .map((index) => `<span class="star-badge" data-active="${String(index < record.stars)}">★</span>`)
             .join('')
-        : '<span class="challenge-tag">挑战模式不计星级</span>';
+        : '<span class="challenge-tag">挑战模式会记录全局最快通关时间</span>';
     this.nextLevelButton.disabled = !success || nextLevel === null;
   }
 
