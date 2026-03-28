@@ -1,6 +1,8 @@
 export type AxisDirection = '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z';
 
-export type LevelId = 1 | 2 | 3;
+export type LevelId = 1 | 2 | 3 | 4 | 5 | 6;
+
+export type GameMode = 'endless' | 'challenge';
 
 export interface BlockData {
   id: string;
@@ -23,9 +25,11 @@ export interface LevelDimensions {
 export interface RunRecord {
   id: string;
   level: LevelId;
+  mode: GameMode;
   startedAt: string;
   finishedAt: string;
   result: 'success' | 'fail';
   elapsedSeconds: number;
   stars: 0 | 1 | 2 | 3;
+  earnedCoins: number;
 }

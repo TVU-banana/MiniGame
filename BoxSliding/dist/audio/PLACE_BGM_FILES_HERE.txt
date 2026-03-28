@@ -1,0 +1,11 @@
+Place your BGM files in this folder with these exact names:
+
+- menu-bgm.mp4  -> menu screen BGM
+- game-bgm.mp4  -> in-game BGM
+
+The game will try these paths first:
+
+- /audio/menu-bgm.mp4
+- /audio/game-bgm.mp4
+
+If a file is missing or cannot be played, the project falls back to the built-in synthesized BGM.

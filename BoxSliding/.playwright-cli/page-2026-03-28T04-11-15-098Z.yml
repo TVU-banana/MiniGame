@@ -1,0 +1,26 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "设置" [ref=e6] [cursor=pointer]
+      - generic [ref=e9]: "0"
+    - generic [ref=e10]:
+      - paragraph [ref=e11]: DOUYIN READY · BOX SLIDING
+      - heading "滑块拆塔" [level=1] [ref=e12]
+      - paragraph [ref=e13]: 旋转结构，寻找出口。被卡死时，系统会自动重置；想强行破局时，你也可以用金币购买额外机会。
+      - generic [ref=e34]:
+        - button "不限时模式 正向计时，按通关耗时拿星级" [ref=e35] [cursor=pointer]:
+          - generic [ref=e36]: 不限时模式
+          - generic [ref=e37]: 正向计时，按通关耗时拿星级
+        - button "挑战模式 15 / 30 / 40 秒倒计时冲关" [ref=e38] [cursor=pointer]:
+          - generic [ref=e39]: 挑战模式
+          - generic [ref=e40]: 15 / 30 / 40 秒倒计时冲关
+    - generic [ref=e41]:
+      - button "成就" [active] [ref=e42] [cursor=pointer]
+      - generic [ref=e43]: 预留扩展位
+  - generic [ref=e47]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - paragraph [ref=e50]: ACHIEVEMENTS
+        - heading "成就记录" [level=2] [ref=e51]
+      - button "关闭" [ref=e52] [cursor=pointer]
+    - generic [ref=e54]: 还没有成就记录，先完成一局再回来看看。

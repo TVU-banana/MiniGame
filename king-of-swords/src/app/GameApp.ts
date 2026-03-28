@@ -33,7 +33,6 @@ export class GameApp {
     this.audio = new AudioManager(this.settings);
     this.ui = new AppUI(this.shell, this.settings, this.currentRecords);
     this.game = new Phaser.Game(createGameConfig(this.host));
-    this.game.registry.set('inputProvider', () => this.ui.getJoystickVector());
 
     this.bindEvents();
     this.ui.showMenu();

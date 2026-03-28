@@ -25,8 +25,6 @@ import { KnifeSystem } from '../systems/KnifeSystem';
 import { ProgressionSystem } from '../systems/ProgressionSystem';
 import { distancePointToSegment } from '../utils/math';
 
-type InputProvider = () => { x: number; y: number };
-
 export class GameScene extends Phaser.Scene {
   private player!: Player;
   private enemies!: Phaser.Physics.Arcade.Group;
@@ -40,6 +38,8 @@ export class GameScene extends Phaser.Scene {
   private runStartedAt = 0;
   private maxKnivesHeld = INITIAL_KNIVES;
   private finished = false;
+  private moveVector = new Phaser.Math.Vector2();
+  private dragPointerId: number | null = null;
 
   constructor() {
     super(SceneKeys.Game);
@@ -86,6 +86,7 @@ export class GameScene extends Phaser.Scene {
       this
     );
 
+    this.bindDirectDragControls();
     this.emitHud();
   }
 
@@ -132,16 +133,47 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updatePlayer(_: number): void {
-    const inputProvider = this.registry.get('inputProvider') as InputProvider | undefined;
-    const input = inputProvider?.() ?? { x: 0, y: 0 };
-    const movement = new Phaser.Math.Vector2(input.x, input.y);
-    if (movement.lengthSq() > 1) {
-      movement.normalize();
-    }
+    const movement = this.moveVector.clone();
+    if (movement.lengthSq() > 1) movement.normalize();
     (this.player.body as Phaser.Physics.Arcade.Body).setVelocity(
       movement.x * this.playerState.moveSpeed,
       movement.y * this.playerState.moveSpeed
     );
+  }
+
+  private bindDirectDragControls(): void {
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.finished || this.dragPointerId !== null) return;
+      const distance = Phaser.Math.Distance.Between(pointer.worldX, pointer.worldY, this.player.x, this.player.y);
+      if (distance <= 56) {
+        this.dragPointerId = pointer.id;
+        this.updateMoveVector(pointer);
+      }
+    });
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.id !== this.dragPointerId) return;
+      this.updateMoveVector(pointer);
+    });
+
+    const release = (pointer: Phaser.Input.Pointer) => {
+      if (pointer.id !== this.dragPointerId) return;
+      this.dragPointerId = null;
+      this.moveVector.set(0, 0);
+    };
+
+    this.input.on('pointerup', release);
+    this.input.on('gameout', () => {
+      this.dragPointerId = null;
+      this.moveVector.set(0, 0);
+    });
+  }
+
+  private updateMoveVector(pointer: Phaser.Input.Pointer): void {
+    this.moveVector.set(pointer.worldX - this.player.x, pointer.worldY - this.player.y);
+    if (this.moveVector.lengthSq() > 1) {
+      this.moveVector.normalize();
+    }
   }
 
   private handleKnifeHit(knife: Knife, enemy: Enemy): void {

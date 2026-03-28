@@ -1,0 +1,41 @@
+- generic [ref=e3]:
+  - generic [ref=e44]:
+    - banner [ref=e45]:
+      - generic [ref=e46]:
+        - button "暂停" [ref=e47] [cursor=pointer]
+        - generic [ref=e50]: "0"
+      - generic [ref=e51]:
+        - paragraph [ref=e52]: 挑战模式 · 倒计时
+        - generic [ref=e53]: 00:00
+      - generic [ref=e54]: 平台预留区
+    - generic [ref=e55]:
+      - generic [ref=e56]: 挑战模式 · LEVEL 1
+      - generic [ref=e57]: 剩余 14 块
+    - generic [ref=e62]:
+      - generic [ref=e63]: 当前进度
+      - generic [ref=e64]: 0 / 14
+    - generic [ref=e66]:
+      - button "反向 5 次" [ref=e67] [cursor=pointer]:
+        - generic [ref=e68]: 反向
+        - generic [ref=e69]: 5 次
+      - button "消块 1 次 / 3 块" [ref=e70] [cursor=pointer]:
+        - generic [ref=e71]: 消块
+        - generic [ref=e72]: 1 次 / 3 块
+      - button "重置 5 次" [ref=e73] [cursor=pointer]:
+        - generic [ref=e74]: 重置
+        - generic [ref=e75]: 5 次
+    - paragraph [ref=e76]: 挑战模式下计时结束会直接失败，尽快清空全部方块。
+  - generic [ref=e80]:
+    - generic [ref=e81]:
+      - generic [ref=e82]:
+        - paragraph [ref=e83]: RESULT
+        - heading "挑战失败" [level=2] [ref=e84]
+      - button "关闭" [ref=e85] [cursor=pointer]
+    - paragraph [ref=e86]: 倒计时结束，本次挑战失败。
+    - paragraph [ref=e87]: Level 1 · 挑战模式 · 用时 00:15
+    - paragraph [ref=e88]: 本局金币 +0
+    - generic [ref=e90]: 挑战模式不计星级
+    - generic [ref=e91]:
+      - button "下一关" [disabled] [ref=e92]
+      - button "重开本关" [ref=e93] [cursor=pointer]
+      - button "回到菜单" [ref=e94] [cursor=pointer]

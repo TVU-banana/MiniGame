@@ -19,6 +19,50 @@ export interface MoveCheckResult {
 export class MoveValidator {
   isBlockRemovable(block: BlockData, blocks: BlockData[], dimensions: LevelDimensions): MoveCheckResult {
     const grid = Grid3D.fromBlocks(dimensions, blocks);
+    return this.isBlockRemovableWithGrid(block, grid, dimensions);
+  }
+
+  getRemovableBlocks(blocks: BlockData[], dimensions: LevelDimensions): BlockData[] {
+    const grid = Grid3D.fromBlocks(dimensions, blocks);
+    return blocks.filter(
+      (block) => !block.removed && this.isBlockRemovableWithGrid(block, grid, dimensions).removable,
+    );
+  }
+
+  countRemovableBlocks(blocks: BlockData[], dimensions: LevelDimensions): number {
+    const grid = Grid3D.fromBlocks(dimensions, blocks);
+    let count = 0;
+
+    for (const block of blocks) {
+      if (block.removed) {
+        continue;
+      }
+      if (this.isBlockRemovableWithGrid(block, grid, dimensions).removable) {
+        count += 1;
+      }
+    }
+
+    return count;
+  }
+
+  isFailureState(
+    blocks: BlockData[],
+    dimensions: LevelDimensions,
+    reverseRemaining: number,
+    resetRemaining: number,
+  ): boolean {
+    return (
+      this.countRemovableBlocks(blocks, dimensions) === 0 &&
+      reverseRemaining === 0 &&
+      resetRemaining === 0
+    );
+  }
+
+  private isBlockRemovableWithGrid(
+    block: BlockData,
+    grid: Grid3D,
+    dimensions: LevelDimensions,
+  ): MoveCheckResult {
     const step = DIRECTION_STEP[block.direction];
     const travelUnits = this.computeTravelUnits(block, dimensions, step);
 
@@ -43,27 +87,6 @@ export class MoveValidator {
     }
 
     return { removable: true, travelUnits, step };
-  }
-
-  getRemovableBlocks(blocks: BlockData[], dimensions: LevelDimensions): BlockData[] {
-    return blocks.filter((block) => !block.removed && this.isBlockRemovable(block, blocks, dimensions).removable);
-  }
-
-  countRemovableBlocks(blocks: BlockData[], dimensions: LevelDimensions): number {
-    return this.getRemovableBlocks(blocks, dimensions).length;
-  }
-
-  isFailureState(
-    blocks: BlockData[],
-    dimensions: LevelDimensions,
-    reverseRemaining: number,
-    resetRemaining: number,
-  ): boolean {
-    return (
-      this.countRemovableBlocks(blocks, dimensions) === 0 &&
-      reverseRemaining === 0 &&
-      resetRemaining === 0
-    );
   }
 
   private computeTravelUnits(

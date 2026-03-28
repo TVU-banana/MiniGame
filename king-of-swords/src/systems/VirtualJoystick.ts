@@ -2,7 +2,7 @@ export class VirtualJoystick {
   private pointerId: number | null = null;
   private vector = { x: 0, y: 0 };
   private readonly baseRadius = 44;
-  private readonly inputScale = 1.2;
+  private readonly inputScale = 1.35;
 
   constructor(
     private root: HTMLElement,
@@ -48,14 +48,16 @@ export class VirtualJoystick {
     const distance = Math.hypot(dx, dy);
     const clamped = Math.min(this.baseRadius, distance);
     const angle = Math.atan2(dy, dx);
+    const strength = clamped / this.baseRadius;
+    const responsiveStrength = Math.pow(strength, 0.72);
     const knobX = Math.cos(angle) * clamped;
     const knobY = Math.sin(angle) * clamped;
     const normalized =
       distance === 0
         ? { x: 0, y: 0 }
         : {
-            x: Math.max(-1, Math.min(1, (knobX / this.baseRadius) * this.inputScale)),
-            y: Math.max(-1, Math.min(1, (knobY / this.baseRadius) * this.inputScale))
+            x: Math.max(-1, Math.min(1, Math.cos(angle) * responsiveStrength * this.inputScale)),
+            y: Math.max(-1, Math.min(1, Math.sin(angle) * responsiveStrength * this.inputScale))
           };
     this.vector = normalized;
     this.knob.style.transform = `translate(-50%, -50%) translate(${knobX}px, ${knobY}px)`;

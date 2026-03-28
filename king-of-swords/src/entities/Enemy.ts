@@ -12,6 +12,7 @@ export class Enemy extends Phaser.Physics.Arcade.Image {
   private steeringTimer = 0;
   private steeringAngle = 0;
   private knockbackUntil = 0;
+  private recoveryUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
 
   constructor(
@@ -43,6 +44,7 @@ export class Enemy extends Phaser.Physics.Arcade.Image {
 
   applyKnockback(vector: Phaser.Math.Vector2, now: number, durationMs = 180): void {
     this.knockbackUntil = now + durationMs;
+    this.recoveryUntil = this.knockbackUntil + 420;
     this.knockbackVelocity.copy(vector);
     (this.body as Phaser.Physics.Arcade.Body).setVelocity(vector.x, vector.y);
   }
@@ -62,10 +64,13 @@ export class Enemy extends Phaser.Physics.Arcade.Image {
       this.steeringAngle = angleToPlayer + offset;
       this.steeringTimer = Phaser.Math.Between(180, 460);
     }
-    this.scene.physics.velocityFromRotation(
-      this.steeringAngle,
-      this.moveSpeed,
-      body.velocity
-    );
+    let speedFactor = 1;
+    if (now < this.recoveryUntil) {
+      const recoveryProgress =
+        (now - this.knockbackUntil) / Math.max(1, this.recoveryUntil - this.knockbackUntil);
+      speedFactor = Phaser.Math.Linear(0.35, 1, Phaser.Math.Clamp(recoveryProgress, 0, 1));
+    }
+
+    this.scene.physics.velocityFromRotation(this.steeringAngle, this.moveSpeed * speedFactor, body.velocity);
   }
 }

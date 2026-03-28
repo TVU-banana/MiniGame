@@ -1,7 +1,6 @@
 import { appEvents } from '../app/events';
 import type { GameResult, GameSnapshot, RunRecord, SettingsState } from '../app/types';
 import { formatDateTime, formatSeconds } from '../utils/time';
-import { VirtualJoystick } from '../systems/VirtualJoystick';
 
 export class AppUI {
   private readonly root: HTMLDivElement;
@@ -11,7 +10,6 @@ export class AppUI {
   private readonly historyOverlay: HTMLDivElement;
   private readonly resultOverlay: HTMLDivElement;
   private readonly toast: HTMLDivElement;
-  private readonly joystick: VirtualJoystick;
   private readonly values: Record<string, HTMLElement>;
   private readonly recordsContainer: HTMLDivElement;
 
@@ -36,19 +34,16 @@ export class AppUI {
     };
 
     this.bindButtons();
-    const joystickRoot = this.query<HTMLElement>('.joystick');
-    const joystickKnob = this.query<HTMLElement>('.joystick__knob');
-    this.joystick = new VirtualJoystick(joystickRoot, joystickKnob);
     this.applySettings(settings);
     this.renderRecords(records);
   }
 
   getJoystickVector(): { x: number; y: number } {
-    return this.joystick.getVector();
+    return { x: 0, y: 0 };
   }
 
   resetJoystick(): void {
-    this.joystick.reset();
+    // Direct-drag control no longer uses a DOM joystick.
   }
 
   showMenu(): void {
@@ -57,13 +52,11 @@ export class AppUI {
     this.settingsOverlay.hidden = true;
     this.historyOverlay.hidden = true;
     this.resultOverlay.hidden = true;
-    this.query('.joystick').hidden = true;
   }
 
   showGameHud(): void {
     this.menuScreen.hidden = true;
     this.hud.hidden = false;
-    this.query('.joystick').hidden = false;
     this.settingsOverlay.hidden = true;
     this.historyOverlay.hidden = true;
     this.resultOverlay.hidden = true;
@@ -88,7 +81,6 @@ export class AppUI {
   showResult(result: GameResult): void {
     this.menuScreen.hidden = true;
     this.hud.hidden = true;
-    this.query('.joystick').hidden = true;
     this.resultOverlay.hidden = false;
     this.query('[data-result="title"]').textContent = result.success ? '生存成功' : '战斗失败';
     this.query('[data-result="summary"]').textContent = result.success
@@ -219,11 +211,6 @@ export class AppUI {
           <button class="chip" data-action="open-settings">设置</button>
           <button class="chip" data-action="return-menu">菜单</button>
         </div>
-      </div>
-
-      <div class="joystick" hidden>
-        <div class="joystick__base"></div>
-        <div class="joystick__knob"></div>
       </div>
 
       <div class="toast" hidden>刀数 +1</div>
