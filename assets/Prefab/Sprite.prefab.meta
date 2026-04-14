@@ -2,13 +2,12 @@
   "ver": "1.1.50",
   "importer": "prefab",
   "imported": true,
-  "uuid": "b03aefb6-269b-427c-a565-c4adf259c3e0",
+  "uuid": "517cc81d-8cb3-4bd4-8ad1-94d89f79c8ba",
   "files": [
     ".json"
   ],
   "subMetas": {},
   "userData": {
-    "syncNodeName": "Platform",
-    "persistent": false
+    "syncNodeName": "Sprite"
   }
 }

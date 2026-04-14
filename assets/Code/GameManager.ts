@@ -36,6 +36,9 @@ export class GameManager extends Component {
     finalScoreLabel: Node = null;
 
     @property(Node)
+    highScoreLabel: Node = null;
+
+    @property(Node)
     restartButton: Node = null;
 
     @property(Node)
@@ -66,20 +69,23 @@ export class GameManager extends Component {
     maxPlatformDistance: number = 200;
 
     @property
-    minPlatformWidth: number = 50;
+    minPlatformWidth: number = 75;
 
     @property
-    maxPlatformWidth: number = 100;
+    maxPlatformWidth: number = 150;
 
     private platforms: Node[] = [];
     private currentStick: Node = null;
     private gameState: GameState = GameState.WAITING;
     private currentPlatformIndex: number = 0;
     private score: number = 0;
+    private highScore: number = 0;
     private isTouching: boolean = false;
 
     start() {
         this.audioSource = this.node.getComponent(AudioSource);
+        
+        this.highScore = parseInt(localStorage.getItem('highScore') || '0');
         
         this.initGame();
         this.setupInput();
@@ -402,6 +408,13 @@ export class GameManager extends Component {
         this.gameState = GameState.GAMEOVER;
         console.log('Game Over! Score:', this.score);
         
+        if (this.score > this.highScore) {
+            this.highScore = this.score;
+            localStorage.setItem('highScore', this.highScore.toString());
+        }
+        
+        this.saveScoreRecord();
+        
         if (this.gameOverPanel) {
             this.gameOverPanel.active = true;
             this.gameOverPanel.setPosition(0, 0, 0);
@@ -411,7 +424,7 @@ export class GameManager extends Component {
         if (this.finalScoreLabel) {
             const label = this.finalScoreLabel.getComponent(Label);
             if (label) {
-                label.string = '当前分数：' + this.score;
+                label.string = '当前分数：' + this.score + '\n历史最高分：' + this.highScore;
                 label.color = new Color(0, 255, 0);
             }
         }
@@ -421,9 +434,40 @@ export class GameManager extends Component {
         if (this.scoreLabel) {
             const label = this.scoreLabel.getComponent(Label);
             if (label) {
-                label.string = '分数：' + this.score;
+                label.string = '分数：' + this.score + '  最高分：' + this.highScore;
             }
         }
+    }
+
+    getGrade(score: number): string {
+        if (score >= 50) return 'S';
+        if (score >= 40) return 'A';
+        if (score >= 20) return 'B';
+        return 'C';
+    }
+
+    saveScoreRecord() {
+        const recordsJson = localStorage.getItem('scoreRecords');
+        let records: any[] = recordsJson ? JSON.parse(recordsJson) : [];
+        
+        const now = new Date();
+        const month = String(now.getMonth() + 1).length === 1 ? '0' + String(now.getMonth() + 1) : String(now.getMonth() + 1);
+        const day = String(now.getDate()).length === 1 ? '0' + String(now.getDate()) : String(now.getDate());
+        const hours = String(now.getHours()).length === 1 ? '0' + String(now.getHours()) : String(now.getHours());
+        const minutes = String(now.getMinutes()).length === 1 ? '0' + String(now.getMinutes()) : String(now.getMinutes());
+        const time = now.getFullYear() + '-' + month + '-' + day + ' ' + hours + ':' + minutes;
+        
+        records.push({
+            score: this.score,
+            grade: this.getGrade(this.score),
+            time: time
+        });
+        
+        if (records.length > 20) {
+            records = records.slice(-20);
+        }
+        
+        localStorage.setItem('scoreRecords', JSON.stringify(records));
     }
 
     update(deltaTime: number) {
@@ -441,23 +485,12 @@ export class GameManager extends Component {
             this.camera.setPosition(newX, 0, 1000);
             
             if (this.bg) {
-                this.bg.setPosition(newX, 0, 0);
-                const bgTransform = this.bg.getComponent(UITransform);
-                const bgSprite = this.bg.getComponent(Sprite);
-                if (bgTransform) {
-                    const minWidth = 1500;
-                    const neededWidth = Math.max(minWidth, newX + 1000);
-                    if (bgTransform.width < neededWidth) {
-                        bgTransform.width = neededWidth;
-                        if (bgSprite) {
-                            bgSprite.color = new Color(255, 255, 255, 255);
-                        }
-                    }
-                }
+                const bgPos = this.bg.position;
+                this.bg.setPosition(targetX, bgPos.y, bgPos.z);
             }
             
             if (this.scoreLabel) {
-                this.scoreLabel.setPosition(newX -  250, 500, 0);
+                this.scoreLabel.setPosition(newX , 550, 0);
             }
             
             if (this.gameOverPanel && this.gameOverPanel.active) {
@@ -465,7 +498,7 @@ export class GameManager extends Component {
             }
             
             if (this.settingButton) {
-                this.settingButton.setPosition(newX + 280, 550, 0);
+                this.settingButton.setPosition(newX - 300, 550, 0);
             }
             
             if (this.settingPanel && this.settingPanel.active) {
