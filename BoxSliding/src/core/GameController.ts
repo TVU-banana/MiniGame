@@ -1,11 +1,17 @@
 import type { LevelRuntime } from '../app/GameState';
-import { formatElapsed, toIsoNow } from '../utils/time';
-import type { BlockData, LevelDimensions, LevelId, RunRecord } from './BlockModel';
+import { toIsoNow } from '../utils/time';
+import type { BlockData, GameMode, LevelDimensions, LevelId, RunRecord } from './BlockModel';
 import { DirectionAssigner } from './DirectionAssigner';
-import { getNextLevel, LEVEL_CONFIG } from './LevelConfig';
+import { CHALLENGE_TIME_LIMITS, getNextLevel, LEVEL_CONFIG } from './LevelConfig';
 import { LevelGenerator } from './LevelGenerator';
 import { MoveValidator, directionToVector, type MoveCheckResult } from './MoveValidator';
 import { HistoryStore } from './HistoryStore';
+
+export const EXTRA_TOOL_COSTS = {
+  reverse: 1000,
+  reset: 1500,
+  clear: 2000,
+} as const;
 
 export interface BlockActionRequest {
   block: BlockData;
@@ -27,22 +33,30 @@ export interface GameControllerEvents {
     active: boolean;
     remaining: number;
   };
+  coinsChanged: {
+    total: number;
+    delta: number;
+  };
+  notice: {
+    message: string;
+    tone: 'info' | 'warning' | 'success';
+  };
   blockAnimationRequested: {
     blockId: string;
+    kind: 'slide' | 'blocked';
     removable: boolean;
     direction: { x: number; y: number; z: number };
     distance: number;
   };
   blockAnimationFinished: {
     blockId: string;
-    removable: boolean;
+    kind: 'slide' | 'blocked' | 'shatter';
   };
   levelSucceeded: {
     runtime: LevelRuntime;
     record: RunRecord;
     nextLevel: LevelId | null;
     message: string;
-    starsText: string;
   };
   levelFailed: {
     runtime: LevelRuntime;
@@ -55,11 +69,10 @@ type Listener<T> = (payload: T) => void;
 
 export class GameController {
   private runtime: LevelRuntime | null = null;
-
   private dimensions: LevelDimensions | null = null;
-
   private tickStartedAt = 0;
-
+  private levelResolved = false;
+  private coins: number;
   private readonly listeners = new Map<keyof GameControllerEvents, Set<Listener<any>>>();
 
   constructor(
@@ -67,7 +80,9 @@ export class GameController {
     private readonly directionAssigner: DirectionAssigner,
     private readonly moveValidator: MoveValidator,
     private readonly historyStore: HistoryStore,
-  ) {}
+  ) {
+    this.coins = this.historyStore.loadCoins();
+  }
 
   on<TKey extends keyof GameControllerEvents>(
     eventName: TKey,
@@ -85,15 +100,17 @@ export class GameController {
     };
   }
 
-  startLevel(levelId: LevelId): LevelRuntime {
+  startLevel(levelId: LevelId, mode: GameMode): LevelRuntime {
     const dimensions = LEVEL_CONFIG[levelId];
-    const generated = this.levelGenerator.generate(dimensions);
+    const generated = this.levelGenerator.generate(levelId, dimensions);
     const blocks = this.directionAssigner.assignDirections(generated, dimensions);
     const removableCount = this.moveValidator.countRemovableBlocks(blocks, dimensions);
 
     this.dimensions = dimensions;
+    this.levelResolved = false;
     this.runtime = {
       levelId,
+      mode,
       blocks,
       totalBlocks: blocks.length,
       removedCount: 0,
@@ -101,7 +118,10 @@ export class GameController {
       elapsedMs: 0,
       reverseRemaining: 5,
       resetRemaining: 5,
+      clearChargesRemaining: 1,
       removableCount,
+      coinsEarned: 0,
+      timeLimitMs: mode === 'challenge' ? CHALLENGE_TIME_LIMITS[levelId] : null,
     };
     this.tickStartedAt = performance.now();
 
@@ -116,15 +136,23 @@ export class GameController {
     if (!this.runtime) {
       return null;
     }
-    return this.startLevel(this.runtime.levelId);
+    return this.startLevel(this.runtime.levelId, this.runtime.mode);
   }
 
   tick(now: number): void {
-    if (!this.runtime) {
+    if (!this.runtime || this.levelResolved) {
       return;
     }
 
     this.runtime.elapsedMs = Math.max(0, now - this.tickStartedAt);
+
+    if (this.runtime.timeLimitMs !== null && this.runtime.elapsedMs >= this.runtime.timeLimitMs) {
+      this.runtime.elapsedMs = this.runtime.timeLimitMs;
+      this.emit('runtimeChanged', this.cloneRuntime());
+      this.handleFailure('倒计时结束，挑战失败。');
+      return;
+    }
+
     this.emit('runtimeChanged', this.cloneRuntime());
   }
 
@@ -153,12 +181,23 @@ export class GameController {
     return this.historyStore.loadUnlockedLevel();
   }
 
+  getCoins(): number {
+    return this.coins;
+  }
+
   toggleReverseSelection(active: boolean): void {
+    if (this.levelResolved) {
+      return;
+    }
     const runtime = this.getRuntimeOrThrow();
     this.emit('reverseStateChanged', { active, remaining: runtime.reverseRemaining });
   }
 
   requestBlockAction(blockId: string): BlockActionRequest | null {
+    if (this.levelResolved) {
+      return null;
+    }
+
     const runtime = this.getRuntimeOrThrow();
     const block = runtime.blocks.find((entry) => entry.id === blockId && !entry.removed);
     if (!block || !this.dimensions) {
@@ -168,6 +207,7 @@ export class GameController {
     const result = this.moveValidator.isBlockRemovable(block, runtime.blocks, this.dimensions);
     this.emit('blockAnimationRequested', {
       blockId: block.id,
+      kind: result.removable ? 'slide' : 'blocked',
       removable: result.removable,
       direction: directionToVector(block.direction),
       distance: result.travelUnits,
@@ -176,6 +216,10 @@ export class GameController {
   }
 
   applyReverse(blockId: string): LevelRuntime | null {
+    if (this.levelResolved) {
+      return null;
+    }
+
     const runtime = this.getRuntimeOrThrow();
     if (runtime.reverseRemaining <= 0 || !this.dimensions) {
       return null;
@@ -194,13 +238,152 @@ export class GameController {
     this.emit('directionsChanged', { blocks: snapshot.blocks });
     this.emit('runtimeChanged', snapshot);
     this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
-    this.checkFailure();
+    this.resolveStalemateIfNeeded();
     return snapshot;
   }
 
   applyReset(): LevelRuntime | null {
+    if (this.levelResolved) {
+      return null;
+    }
+    const result = this.applyResetInternal(true);
+    this.resolveStalemateIfNeeded();
+    return result;
+  }
+
+  armClearMode(): boolean {
+    if (this.levelResolved) {
+      return false;
+    }
+
     const runtime = this.getRuntimeOrThrow();
-    if (runtime.resetRemaining <= 0 || !this.dimensions) {
+    if (runtime.clearChargesRemaining <= 0) {
+      return false;
+    }
+
+    runtime.clearChargesRemaining -= 1;
+    this.emit('runtimeChanged', this.cloneRuntime());
+    return true;
+  }
+
+  finalizeAnimation(blockId: string, removable: boolean): void {
+    if (this.levelResolved) {
+      return;
+    }
+
+    const runtime = this.getRuntimeOrThrow();
+    if (!this.dimensions) {
+      return;
+    }
+
+    const block = runtime.blocks.find((entry) => entry.id === blockId);
+    if (!block) {
+      return;
+    }
+
+    if (removable && !block.removed) {
+      block.removed = true;
+      runtime.removedCount += 1;
+      runtime.coinsEarned += 10;
+      this.addCoins(10);
+      runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+      this.emit('runtimeChanged', this.cloneRuntime());
+    }
+
+    this.emit('blockAnimationFinished', {
+      blockId,
+      kind: removable ? 'slide' : 'blocked',
+    });
+
+    if (!removable) {
+      return;
+    }
+
+    if (runtime.removedCount === runtime.totalBlocks) {
+      this.handleSuccess();
+      return;
+    }
+
+    this.resolveStalemateIfNeeded();
+  }
+
+  finalizeCheatRemoval(blockId: string): void {
+    if (this.levelResolved) {
+      return;
+    }
+
+    const runtime = this.getRuntimeOrThrow();
+    if (!this.dimensions) {
+      return;
+    }
+
+    const block = runtime.blocks.find((entry) => entry.id === blockId && !entry.removed);
+    if (!block) {
+      return;
+    }
+
+    block.removed = true;
+    runtime.removedCount += 1;
+    runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
+
+    const snapshot = this.cloneRuntime();
+    this.emit('runtimeChanged', snapshot);
+    this.emit('blockAnimationFinished', { blockId, kind: 'shatter' });
+
+    if (runtime.removedCount === runtime.totalBlocks) {
+      this.handleSuccess();
+      return;
+    }
+
+    this.resolveStalemateIfNeeded();
+  }
+
+  purchaseExtra(kind: 'reverse' | 'reset' | 'clear'): boolean {
+    if (this.levelResolved) {
+      return false;
+    }
+
+    const cost = EXTRA_TOOL_COSTS[kind];
+    if (this.coins < cost) {
+      this.emit('notice', {
+        message: '金币不足，无法购买额外次数。',
+        tone: 'warning',
+      });
+      return false;
+    }
+
+    const runtime = this.getRuntimeOrThrow();
+    this.addCoins(-cost);
+
+    if (kind === 'reverse') {
+      runtime.reverseRemaining += 1;
+    } else if (kind === 'reset') {
+      runtime.resetRemaining += 1;
+    } else {
+      runtime.clearChargesRemaining += 1;
+    }
+
+    this.emit('runtimeChanged', this.cloneRuntime());
+    this.emit('notice', {
+      message: `已花费 ${cost} 金币，购买 1 次${
+        kind === 'reverse' ? '反向' : kind === 'reset' ? '重置' : '消块'
+      }。`,
+      tone: 'info',
+    });
+    return true;
+  }
+
+  private applyResetInternal(consumeCharge: boolean, emitUpdates = true): LevelRuntime | null {
+    if (this.levelResolved) {
+      return null;
+    }
+
+    const runtime = this.getRuntimeOrThrow();
+    if (!this.dimensions) {
+      return null;
+    }
+
+    if (consumeCharge && runtime.resetRemaining <= 0) {
       return null;
     }
 
@@ -215,61 +398,72 @@ export class GameController {
       }
     }
 
-    runtime.resetRemaining -= 1;
+    if (consumeCharge) {
+      runtime.resetRemaining -= 1;
+    }
+
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
 
     const snapshot = this.cloneRuntime();
-    this.emit('directionsChanged', { blocks: snapshot.blocks });
-    this.emit('runtimeChanged', snapshot);
-    this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
-    this.checkFailure();
+    if (emitUpdates) {
+      this.emit('directionsChanged', { blocks: snapshot.blocks });
+      this.emit('runtimeChanged', snapshot);
+      this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
+    }
     return snapshot;
   }
 
-  finalizeAnimation(blockId: string, removable: boolean): void {
-    const runtime = this.getRuntimeOrThrow();
-    if (!this.dimensions) {
+  private resolveStalemateIfNeeded(): void {
+    const runtime = this.runtime;
+    if (!runtime || this.levelResolved || runtime.removedCount === runtime.totalBlocks || !this.dimensions) {
       return;
-    }
-
-    const block = runtime.blocks.find((entry) => entry.id === blockId);
-    if (!block) {
-      return;
-    }
-
-    if (removable && !block.removed) {
-      block.removed = true;
-      runtime.removedCount += 1;
     }
 
     runtime.removableCount = this.moveValidator.countRemovableBlocks(runtime.blocks, this.dimensions);
-
-    const snapshot = this.cloneRuntime();
-    this.emit('runtimeChanged', snapshot);
-    this.emit('blockAnimationFinished', { blockId, removable });
-
-    if (runtime.removedCount === runtime.totalBlocks) {
-      this.handleSuccess();
+    if (runtime.removableCount > 0) {
       return;
     }
 
-    this.checkFailure();
+    const attemptLimit = this.getAutoResetAttemptLimit(runtime.totalBlocks);
+
+    for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
+      const snapshot = this.applyResetInternal(false, false);
+      if (snapshot && runtime.removableCount > 0) {
+        this.emit('directionsChanged', { blocks: snapshot.blocks });
+        this.emit('runtimeChanged', snapshot);
+        this.emit('reverseStateChanged', { active: false, remaining: snapshot.reverseRemaining });
+        this.emit('notice', {
+          message: '无块可消，自动重置',
+          tone: 'info',
+        });
+        return;
+      }
+    }
+
+    this.handleFailure('当前局面已锁死，系统仍未找到可继续的方向。');
   }
 
-  getProgressText(): string {
-    const runtime = this.getRuntimeOrThrow();
-    return `${runtime.removedCount} / ${runtime.totalBlocks}`;
-  }
-
-  getElapsedLabel(): string {
-    return formatElapsed(this.getRuntimeOrThrow().elapsedMs);
+  private getAutoResetAttemptLimit(totalBlocks: number): number {
+    if (totalBlocks >= 120) {
+      return 6;
+    }
+    if (totalBlocks >= 80) {
+      return 8;
+    }
+    if (totalBlocks >= 54) {
+      return 10;
+    }
+    return 12;
   }
 
   private handleSuccess(): void {
     const runtime = this.getRuntimeOrThrow();
     const nextLevel = getNextLevel(runtime.levelId);
 
-    if (nextLevel !== null) {
+    runtime.coinsEarned += 100;
+    this.addCoins(100);
+
+    if (runtime.mode === 'challenge' && nextLevel !== null) {
       const unlockedLevel = this.historyStore.loadUnlockedLevel();
       if (nextLevel > unlockedLevel) {
         this.historyStore.saveUnlockedLevel(nextLevel);
@@ -278,38 +472,30 @@ export class GameController {
 
     const record = this.createRecord('success');
     this.historyStore.saveRun(record);
+    this.levelResolved = true;
     this.emit('levelSucceeded', {
       runtime: this.cloneRuntime(),
       record,
       nextLevel,
-      message: '恭喜通关，整座滑块塔已经被你拆空了。',
-      starsText: `${record.stars} 星评价`,
+      message:
+        runtime.mode === 'challenge'
+          ? '挑战成功，在倒计时结束前完成了清空。'
+          : '本关已通关，继续挑战下一关吧。',
     });
   }
 
-  private checkFailure(): void {
-    const runtime = this.getRuntimeOrThrow();
-    if (!this.dimensions) {
-      return;
-    }
-
-    if (
-      !this.moveValidator.isFailureState(
-        runtime.blocks,
-        this.dimensions,
-        runtime.reverseRemaining,
-        runtime.resetRemaining,
-      )
-    ) {
+  private handleFailure(message: string): void {
+    if (this.levelResolved) {
       return;
     }
 
     const record = this.createRecord('fail');
     this.historyStore.saveRun(record);
+    this.levelResolved = true;
     this.emit('levelFailed', {
       runtime: this.cloneRuntime(),
       record,
-      message: '已经没有可滑出的方块，而且反向与重置次数也耗尽了。',
+      message,
     });
   }
 
@@ -319,11 +505,13 @@ export class GameController {
     return {
       id: crypto.randomUUID(),
       level: runtime.levelId,
+      mode: runtime.mode,
       startedAt: runtime.startedAt,
       finishedAt: toIsoNow(),
       result,
       elapsedSeconds,
-      stars: result === 'success' ? this.resolveStars(elapsedSeconds) : 0,
+      stars: result === 'success' && runtime.mode === 'endless' ? this.resolveStars(elapsedSeconds) : 0,
+      earnedCoins: runtime.coinsEarned,
     };
   }
 
@@ -335,6 +523,12 @@ export class GameController {
       return 2;
     }
     return 1;
+  }
+
+  private addCoins(delta: number): void {
+    this.coins = Math.max(0, this.coins + delta);
+    this.historyStore.saveCoins(this.coins);
+    this.emit('coinsChanged', { total: this.coins, delta });
   }
 
   private emit<TKey extends keyof GameControllerEvents>(
@@ -353,7 +547,7 @@ export class GameController {
 
   private getRuntimeOrThrow(): LevelRuntime {
     if (!this.runtime) {
-      throw new Error('当前没有进行中的关卡。');
+      throw new Error('当前没有正在进行的关卡。');
     }
     return this.runtime;
   }

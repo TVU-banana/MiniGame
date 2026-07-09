@@ -6,6 +6,7 @@ export interface AudioSettings {
 }
 
 type BgmMode = 'menu' | 'game' | null;
+type SfxKind = 'button' | 'slide' | 'blocked' | 'success' | 'fail';
 
 interface NoteStep {
   freq: number;
@@ -15,6 +16,18 @@ interface NoteStep {
 }
 
 const SETTINGS_KEY = 'slider-clear-3d:audio';
+const BGM_FADE_SECONDS = 1.35;
+const EXTERNAL_BGM_SOURCES = {
+  menu: ['/audio/menu-bgm.mp3', '/audio/menu-bgm.mp4'],
+  game: ['/audio/game-bgm.mp3', '/audio/game-bgm.mp4'],
+} satisfies Record<Exclude<BgmMode, null>, string[]>;
+const EXTERNAL_SFX_SOURCES = {
+  button: ['/audio/button-sfx.mp3', '/audio/button-sfx.mp4'],
+  slide: ['/audio/slide-sfx.mp3', '/audio/slide-sfx.mp4'],
+  blocked: ['/audio/blocked-sfx.mp3', '/audio/blocked-sfx.mp4'],
+  success: ['/audio/success-sfx.mp3', '/audio/success-sfx.mp4'],
+  fail: ['/audio/fail-sfx.mp3', '/audio/fail-sfx.mp4'],
+} satisfies Record<SfxKind, string[]>;
 
 const DEFAULT_SETTINGS: AudioSettings = {
   bgmEnabled: true,
@@ -42,6 +55,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function isAutoplayError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'NotAllowedError';
+}
+
 export class AudioManager {
   private context: AudioContext | null = null;
 
@@ -53,6 +70,24 @@ export class AudioManager {
 
   private settings = this.loadSettings();
 
+  private readonly mediaAudio = new Map<Exclude<BgmMode, null>, HTMLAudioElement>();
+
+  private readonly mediaUnavailable = new Set<Exclude<BgmMode, null>>();
+
+  private readonly mediaSourceIndex = new Map<Exclude<BgmMode, null>, number>();
+
+  private readonly sfxAudio = new Map<SfxKind, HTMLAudioElement>();
+
+  private readonly sfxUnavailable = new Set<SfxKind>();
+
+  private readonly sfxSourceIndex = new Map<SfxKind, number>();
+
+  private activeMediaAudio: HTMLAudioElement | null = null;
+
+  private activeMediaMode: Exclude<BgmMode, null> | null = null;
+
+  private mediaMonitorFrame: number | null = null;
+
   getSettings(): AudioSettings {
     return { ...this.settings };
   }
@@ -63,8 +98,14 @@ export class AudioManager {
       await context.resume();
     }
 
-    if (this.bgmMode && this.loopTimer === null && this.canPlayBgm()) {
-      this.startBgm(this.bgmMode);
+    if (this.bgmMode && this.canPlayBgm()) {
+      const usingMedia = this.activeMediaMode === this.bgmMode && this.activeMediaAudio !== null;
+      const usingSynth = this.loopTimer !== null;
+      if (!usingMedia && !usingSynth) {
+        this.startBgm(this.bgmMode);
+      } else if (usingMedia) {
+        void this.activeMediaAudio?.play().catch(() => undefined);
+      }
     }
   }
 
@@ -81,6 +122,8 @@ export class AudioManager {
 
     if (!this.canPlayBgm()) {
       this.stopBgm();
+    } else if (this.activeMediaAudio) {
+      this.activeMediaAudio.volume = this.getMediaVolume(this.activeMediaAudio);
     } else if (this.bgmMode) {
       this.startBgm(this.bgmMode);
     }
@@ -101,27 +144,55 @@ export class AudioManager {
       window.clearTimeout(this.loopTimer);
       this.loopTimer = null;
     }
+
+    if (this.mediaMonitorFrame !== null) {
+      window.cancelAnimationFrame(this.mediaMonitorFrame);
+      this.mediaMonitorFrame = null;
+    }
+
+    if (this.activeMediaAudio) {
+      this.activeMediaAudio.pause();
+      this.activeMediaAudio.currentTime = 0;
+    }
+
+    this.activeMediaAudio = null;
+    this.activeMediaMode = null;
   }
 
   playButton(): void {
+    if (this.playExternalSfx('button')) {
+      return;
+    }
     this.playTone(660, 0.06, 'triangle', 0.05, 760);
   }
 
   playSlide(): void {
+    if (this.playExternalSfx('slide')) {
+      return;
+    }
     this.playSweep(320, 740, 0.2, 'triangle', 0.08);
   }
 
   playBlocked(): void {
+    if (this.playExternalSfx('blocked')) {
+      return;
+    }
     this.playSweep(210, 130, 0.12, 'square', 0.07);
   }
 
   playSuccess(): void {
+    if (this.playExternalSfx('success')) {
+      return;
+    }
     this.playTone(523.25, 0.12, 'triangle', 0.08, 620);
     this.playTone(659.25, 0.16, 'triangle', 0.08, 760, 0.08);
     this.playTone(783.99, 0.22, 'triangle', 0.08, 900, 0.16);
   }
 
   playFail(): void {
+    if (this.playExternalSfx('fail')) {
+      return;
+    }
     this.playTone(261.63, 0.16, 'sawtooth', 0.06, 200);
     this.playTone(174.61, 0.24, 'sawtooth', 0.06, 120, 0.12);
   }
@@ -160,45 +231,214 @@ export class AudioManager {
     this.bgmMode = mode;
     this.bgmStep = 0;
     this.stopBgm();
+    this.resetExternalBgmSource(mode);
 
     if (!this.canPlayBgm()) {
       return;
     }
 
+    if (this.startExternalBgm(mode)) {
+      return;
+    }
+
+    this.startSynthBgm(mode);
+  }
+
+  private startExternalBgm(mode: Exclude<BgmMode, null>): boolean {
+    if (this.mediaUnavailable.has(mode)) {
+      return false;
+    }
+
+    const audio = this.getMediaAudio(mode);
+    audio.currentTime = 0;
+    audio.volume = 0;
+    this.activeMediaAudio = audio;
+    this.activeMediaMode = mode;
+
+    void audio
+      .play()
+      .then(() => {
+        this.monitorExternalBgm();
+      })
+      .catch((error: unknown) => {
+        if (this.activeMediaAudio !== audio) {
+          return;
+        }
+        if (isAutoplayError(error)) {
+          this.activeMediaAudio = null;
+          this.activeMediaMode = null;
+          return;
+        }
+        this.mediaUnavailable.add(mode);
+        this.activeMediaAudio = null;
+        this.activeMediaMode = null;
+        if (this.bgmMode === mode) {
+          this.startSynthBgm(mode);
+        }
+      });
+
+    return true;
+  }
+
+  private monitorExternalBgm(): void {
+    if (!this.activeMediaAudio || !this.activeMediaMode || !this.canPlayBgm()) {
+      this.mediaMonitorFrame = null;
+      return;
+    }
+
+    const audio = this.activeMediaAudio;
+    audio.volume = this.getMediaVolume(audio);
+
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      const remaining = audio.duration - audio.currentTime;
+      if (remaining <= 0.05) {
+        audio.currentTime = 0;
+        void audio.play().catch(() => undefined);
+      }
+    }
+
+    this.mediaMonitorFrame = window.requestAnimationFrame(() => this.monitorExternalBgm());
+  }
+
+  private getMediaVolume(audio: HTMLAudioElement): number {
+    const master = this.volumeToGain(this.settings.bgmVolume);
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+      return master;
+    }
+
+    const fadeInRatio = clamp(audio.currentTime / BGM_FADE_SECONDS, 0, 1);
+    const fadeOutRatio = clamp((audio.duration - audio.currentTime) / BGM_FADE_SECONDS, 0, 1);
+    return clamp(master * Math.min(fadeInRatio, fadeOutRatio), 0, 1);
+  }
+
+  private getMediaAudio(mode: Exclude<BgmMode, null>): HTMLAudioElement {
+    const cached = this.mediaAudio.get(mode);
+    if (cached) {
+      return cached;
+    }
+
+    const sources = EXTERNAL_BGM_SOURCES[mode];
+    const audio = new Audio(sources[0]);
+    audio.preload = 'auto';
+    audio.loop = false;
+    audio.setAttribute('playsinline', 'true');
+    audio.crossOrigin = 'anonymous';
+    audio.addEventListener('error', () => {
+      const currentIndex = this.mediaSourceIndex.get(mode) ?? 0;
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < sources.length) {
+        this.mediaSourceIndex.set(mode, nextIndex);
+        audio.src = sources[nextIndex];
+        audio.load();
+        if (this.activeMediaMode === mode) {
+          void audio.play().catch(() => undefined);
+        }
+        return;
+      }
+      this.mediaUnavailable.add(mode);
+      if (this.activeMediaMode === mode) {
+        this.activeMediaAudio = null;
+        this.activeMediaMode = null;
+        if (this.bgmMode === mode) {
+          this.startSynthBgm(mode);
+        }
+      }
+    });
+    this.mediaSourceIndex.set(mode, 0);
+    this.mediaAudio.set(mode, audio);
+    return audio;
+  }
+
+  private resetExternalBgmSource(mode: Exclude<BgmMode, null>): void {
+    this.mediaUnavailable.delete(mode);
+    this.mediaSourceIndex.set(mode, 0);
+
+    const cached = this.mediaAudio.get(mode);
+    if (!cached) {
+      return;
+    }
+
+    const primarySource = EXTERNAL_BGM_SOURCES[mode][0];
+    if (!cached.src.endsWith(primarySource)) {
+      cached.src = primarySource;
+    }
+    cached.load();
+  }
+
+  private playExternalSfx(kind: SfxKind): boolean {
+    if (!this.canPlaySfx() || this.sfxUnavailable.has(kind)) {
+      return false;
+    }
+
+    const audio = this.getSfxAudio(kind);
+    audio.currentTime = 0;
+    audio.volume = this.volumeToGain(this.settings.sfxVolume);
+    void audio.play().catch((error: unknown) => {
+      if (isAutoplayError(error)) {
+        return;
+      }
+      this.sfxUnavailable.add(kind);
+    });
+    return true;
+  }
+
+  private getSfxAudio(kind: SfxKind): HTMLAudioElement {
+    const cached = this.sfxAudio.get(kind);
+    if (cached) {
+      return cached;
+    }
+
+    const sources = EXTERNAL_SFX_SOURCES[kind];
+    const audio = new Audio(sources[0]);
+    audio.preload = 'auto';
+    audio.loop = false;
+    audio.setAttribute('playsinline', 'true');
+    audio.crossOrigin = 'anonymous';
+    audio.addEventListener('error', () => {
+      const currentIndex = this.sfxSourceIndex.get(kind) ?? 0;
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < sources.length) {
+        this.sfxSourceIndex.set(kind, nextIndex);
+        audio.src = sources[nextIndex];
+        audio.load();
+        return;
+      }
+      this.sfxUnavailable.add(kind);
+    });
+    this.sfxSourceIndex.set(kind, 0);
+    this.sfxAudio.set(kind, audio);
+    return audio;
+  }
+
+  private startSynthBgm(mode: Exclude<BgmMode, null>): void {
     const context = this.ensureContext();
     if (context.state !== 'running') {
       return;
     }
 
-    this.scheduleBgmStep();
+    this.activeMediaAudio = null;
+    this.activeMediaMode = null;
+    this.scheduleSynthBgmStep(mode);
   }
 
-  private scheduleBgmStep(): void {
-    if (!this.bgmMode || !this.canPlayBgm() || !this.context || this.context.state !== 'running') {
+  private scheduleSynthBgmStep(mode: Exclude<BgmMode, null>): void {
+    if (!this.canPlayBgm() || !this.context || this.context.state !== 'running' || this.bgmMode !== mode) {
       this.loopTimer = null;
       return;
     }
 
-    const pattern = this.bgmMode === 'menu' ? MENU_PATTERN : GAME_PATTERN;
+    const pattern = mode === 'menu' ? MENU_PATTERN : GAME_PATTERN;
     const step = pattern[this.bgmStep % pattern.length];
     const masterGain = this.volumeToGain(this.settings.bgmVolume);
 
     this.playTone(step.freq, step.duration * 0.92, step.type, step.gain * masterGain, step.freq, 0, false);
-    if (this.bgmMode === 'game') {
-      this.playTone(
-        step.freq * 2,
-        step.duration * 0.65,
-        'sine',
-        step.gain * masterGain * 0.42,
-        step.freq * 2,
-        0,
-        false,
-      );
+    if (mode === 'game') {
+      this.playTone(step.freq * 2, step.duration * 0.65, 'sine', step.gain * masterGain * 0.42, step.freq * 2, 0, false);
     }
 
     this.bgmStep += 1;
     this.loopTimer = window.setTimeout(() => {
-      this.scheduleBgmStep();
+      this.scheduleSynthBgmStep(mode);
     }, step.duration * 1000);
   }
 

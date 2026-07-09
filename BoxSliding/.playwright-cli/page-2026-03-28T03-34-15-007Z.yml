@@ -1,0 +1,40 @@
+- generic [ref=e3]:
+  - generic [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]: ⏱
+        - generic [ref=e20]: 01:27
+      - generic [ref=e21]:
+        - generic [ref=e22]: ☞
+        - generic [ref=e23]: "19"
+    - generic [ref=e24]:
+      - generic [ref=e25]: LEVEL 1
+      - generic [ref=e26]: 剩余 19 块
+      - generic [ref=e27]:
+        - button "设置" [active] [ref=e28] [cursor=pointer]
+        - button "菜单" [ref=e29] [cursor=pointer]
+    - generic [ref=e34]: 0 / 19
+    - generic [ref=e36]:
+      - button "反向 5 次" [ref=e37] [cursor=pointer]:
+        - generic [ref=e38]: 反向
+        - generic [ref=e39]: 5 次
+      - button "重置 4 次" [ref=e44] [cursor=pointer]:
+        - generic [ref=e41]: 重置
+        - generic [ref=e42]: 4 次
+    - paragraph [ref=e43]: 拖动旋转，双指缩放，轻点方块尝试移除。
+  - generic [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]:
+        - paragraph [ref=e51]: AUDIO
+        - heading "设置" [level=2] [ref=e52]
+      - button "关闭" [ref=e53] [cursor=pointer]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - text: BGM 音量
+        - strong [ref=e56]: "62"
+      - slider "BGM 音量 62" [ref=e57]: "62"
+    - generic [ref=e58]:
+      - generic [ref=e59]:
+        - text: 音效音量
+        - strong [ref=e60]: "80"
+      - slider "音效音量 80" [ref=e61]: "80"

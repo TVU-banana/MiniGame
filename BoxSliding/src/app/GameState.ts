@@ -1,23 +1,18 @@
 import type { AudioSettings } from '../audio/AudioManager';
-import type { BlockData, LevelId, RunRecord } from '../core/BlockModel';
+import type { BlockData, GameMode, LevelId, RunRecord } from '../core/BlockModel';
 
-export type ScreenState =
-  | 'BOOT'
-  | 'MENU'
-  | 'LEVEL_RUNNING'
-  | 'RESULT_SUCCESS'
-  | 'RESULT_FAIL'
-  | 'SETTINGS_MODAL'
-  | 'HISTORY_MODAL';
+export type ScreenState = 'MENU' | 'LEVEL_RUNNING';
 
 export type InteractionState =
   | 'NORMAL_CLICK'
   | 'REVERSE_SELECTING'
+  | 'CLEAR_SELECTING'
   | 'BLOCK_ANIMATING'
   | 'CAMERA_DRAGGING';
 
 export interface LevelRuntime {
   levelId: LevelId;
+  mode: GameMode;
   blocks: BlockData[];
   totalBlocks: number;
   removedCount: number;
@@ -25,11 +20,15 @@ export interface LevelRuntime {
   elapsedMs: number;
   reverseRemaining: number;
   resetRemaining: number;
+  clearChargesRemaining: number;
   removableCount: number;
+  coinsEarned: number;
+  timeLimitMs: number | null;
 }
 
 export interface PersistentProgress {
   unlockedLevel: LevelId;
+  coins: number;
 }
 
 export interface GameSnapshot {

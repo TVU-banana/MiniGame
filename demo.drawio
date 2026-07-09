@@ -1,0 +1,13 @@
+<mxfile host="65bd71144e">
+    <diagram id="19HwBaOfMMiJSmqltsDf" name="第 1 页">
+        <mxGraphModel dx="604" dy="571" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0" adaptiveColors="simple">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="2" value="不知道好不好用" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=冬青黑体简体中文;fontSize=16;spacingTop=5;spacingBottom=5;spacingLeft=5;spacingRight=5;spacing=5;" vertex="1" parent="1">
+                    <mxGeometry x="170" y="140" width="140" height="60" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

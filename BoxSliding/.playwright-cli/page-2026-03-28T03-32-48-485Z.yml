@@ -1,0 +1,62 @@
+- generic [ref=e3]:
+  - generic [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]: ⏱
+        - generic [ref=e20]: 00:01
+      - generic [ref=e21]:
+        - generic [ref=e22]: ☞
+        - generic [ref=e23]: "19"
+    - generic [ref=e24]:
+      - generic [ref=e25]: LEVEL 1
+      - generic [ref=e26]: 剩余 19 块
+      - generic [ref=e27]:
+        - button "设置" [ref=e28] [cursor=pointer]
+        - button "菜单" [ref=e29] [cursor=pointer]
+    - generic [ref=e34]: 0 / 19
+    - generic [ref=e36]:
+      - button "反向 5 次" [ref=e37] [cursor=pointer]:
+        - generic [ref=e38]: 反向
+        - generic [ref=e39]: 5 次
+      - button "重置 5 次" [ref=e40] [cursor=pointer]:
+        - generic [ref=e41]: 重置
+        - generic [ref=e42]: 5 次
+    - paragraph [ref=e43]: 拖动旋转，双指缩放，轻点方块尝试移除。
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: AUDIO
+            - heading "设置" [level=2]
+          - button "关闭"
+        - generic:
+          - generic:
+            - text: BGM 音量
+            - strong: "62"
+          - slider "BGM 音量 62": "62"
+        - generic:
+          - generic:
+            - text: 音效音量
+            - strong: "80"
+          - slider "音效音量 80": "80"
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: HISTORY
+            - heading "最近 10 条记录" [level=2]
+          - button "关闭"
+        - generic:
+          - generic: 还没有历史记录，先去完成一局吧。
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: RESULT
+            - heading "结算" [level=2]
+          - button "关闭"
+        - paragraph
+        - paragraph
+        - generic:
+          - button "下一关"
+          - button "重新开始"
+          - button "返回菜单"

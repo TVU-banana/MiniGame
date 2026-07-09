@@ -1,0 +1,47 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - button "设置" [ref=e5] [cursor=pointer]
+    - button "历史记录" [ref=e6] [cursor=pointer]
+    - generic [ref=e7]:
+      - paragraph [ref=e8]: 3D SPACE PUZZLE
+      - heading "滑块消消乐" [level=1] [ref=e9]
+      - paragraph [ref=e10]: 旋转高塔，识别可滑出的方块，在有限的反向与重置次数中找出最短通关路径。
+      - button "开始游戏" [ref=e15] [cursor=pointer]
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: AUDIO
+            - heading "设置" [level=2]
+          - button "关闭"
+        - generic:
+          - generic:
+            - text: BGM 音量
+            - strong: "62"
+          - slider "BGM 音量 62": "62"
+        - generic:
+          - generic:
+            - text: 音效音量
+            - strong: "80"
+          - slider "音效音量 80": "80"
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: HISTORY
+            - heading "最近 10 条记录" [level=2]
+          - button "关闭"
+        - generic:
+          - generic: 还没有历史记录，先去完成一局吧。
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: RESULT
+            - heading "结算" [level=2]
+          - button "关闭"
+        - paragraph
+        - paragraph
+        - generic:
+          - button "下一关"
+          - button "重新开始"
+          - button "返回菜单"

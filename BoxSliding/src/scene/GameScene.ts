@@ -14,7 +14,7 @@ interface BlockVisual {
   body: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
   picker: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   edges: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
-  decals: THREE.Mesh[];
+  decals: THREE.Object3D[];
   block: BlockData;
 }
 
@@ -26,6 +26,14 @@ interface AnimationEntry {
   origin: THREE.Vector3;
   offset: THREE.Vector3;
   resolve: () => void;
+}
+
+interface BurstFragment {
+  mesh: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+  velocity: THREE.Vector3;
+  spin: THREE.Vector3;
+  bornAt: number;
+  duration: number;
 }
 
 interface PickDebugHit {
@@ -61,9 +69,17 @@ declare global {
 
 const FACE_NAMES: FaceName[] = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'];
 const CELL_SIZE = 1;
-const DECAL_EPSILON = 0.008;
+const DECAL_EPSILON = 0.01;
 const PICK_PADDING = 0.04;
 const DEBUG_PICKING_KEY = 'slider-clear-3d:debug-picking';
+const FACE_AXIS: Record<FaceName, 'X' | 'Y' | 'Z'> = {
+  '+X': 'X',
+  '-X': 'X',
+  '+Y': 'Y',
+  '-Y': 'Y',
+  '+Z': 'Z',
+  '-Z': 'Z',
+};
 
 const WORLD_DIRECTION: Record<AxisDirection, THREE.Vector3> = {
   '+X': new THREE.Vector3(1, 0, 0),
@@ -72,15 +88,6 @@ const WORLD_DIRECTION: Record<AxisDirection, THREE.Vector3> = {
   '-Y': new THREE.Vector3(0, -1, 0),
   '+Z': new THREE.Vector3(0, 0, 1),
   '-Z': new THREE.Vector3(0, 0, -1),
-};
-
-const BLANK_FACE_BY_DIRECTION: Record<AxisDirection, FaceName[]> = {
-  '+X': ['+X', '-X'],
-  '-X': ['+X', '-X'],
-  '+Y': ['+Y', '-Y'],
-  '-Y': ['+Y', '-Y'],
-  '+Z': ['+Z', '-Z'],
-  '-Z': ['+Z', '-Z'],
 };
 
 function isDebugPickingEnabled(): boolean {
@@ -132,15 +139,19 @@ export class GameScene {
 
   private readonly blockVisuals = new Map<string, BlockVisual>();
 
-  private readonly textureCache = new Map<string, THREE.CanvasTexture>();
-
   private readonly animations = new Map<string, AnimationEntry>();
+
+  private readonly burstFragments: BurstFragment[] = [];
 
   private readonly resizeObserver: ResizeObserver;
 
   private dimensions: LevelDimensions | null = null;
 
   private pointerDown = { x: 0, y: 0, time: 0 };
+
+  private manualNow: number | null = null;
+
+  private dirty = true;
 
   constructor(
     private readonly host: HTMLElement,
@@ -156,8 +167,7 @@ export class GameScene {
     this.camera.position.set(7.6, 7.2, 8.4);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enablePan = false;
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
+    this.controls.enableDamping = false;
     this.controls.minPolarAngle = 0.02;
     this.controls.maxPolarAngle = Math.PI - 0.02;
     this.controls.minDistance = 5.5;
@@ -165,6 +175,7 @@ export class GameScene {
     this.controls.rotateSpeed = 0.88;
     this.controls.zoomSpeed = 0.94;
     this.controls.target.set(0, 0.8, 0);
+    this.controls.addEventListener('change', this.handleControlsChange);
 
     this.scene.add(this.stageGroup);
 
@@ -195,6 +206,7 @@ export class GameScene {
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
+    this.controls.removeEventListener('change', this.handleControlsChange);
     this.controls.dispose();
     this.renderer.dispose();
   }
@@ -202,6 +214,8 @@ export class GameScene {
   loadLevel(blocks: BlockData[], dimensions: LevelDimensions): void {
     this.clearStage();
     this.dimensions = dimensions;
+    this.manualNow = null;
+    this.applyRenderQuality(blocks.length);
 
     for (const block of blocks) {
       const visual = this.createVisual(block);
@@ -211,6 +225,7 @@ export class GameScene {
 
     this.syncBlocks(blocks);
     this.fitCamera(dimensions);
+    this.invalidate();
   }
 
   syncBlocks(blocks: BlockData[]): void {
@@ -224,6 +239,8 @@ export class GameScene {
         continue;
       }
 
+      const previous = visual.block;
+      const directionChanged = previous.direction !== block.direction;
       visual.block = { ...block };
       visual.group.position.copy(this.getWorldPosition(block));
       visual.group.scale.setScalar(1);
@@ -238,8 +255,12 @@ export class GameScene {
       }
 
       this.setGroupOpacity(visual.group, 1);
-      this.rebuildDecals(visual, block.direction);
+      if (directionChanged) {
+        this.rebuildDecals(visual, block.direction);
+      }
     }
+
+    this.invalidate();
   }
 
   async animateBlock(
@@ -260,20 +281,61 @@ export class GameScene {
     await new Promise<void>((resolve) => {
       this.animations.set(blockId, {
         blockId,
-        startTime: performance.now(),
+        startTime: this.getNow(),
         duration: removable ? 320 : 180,
         removable,
         origin: visual.group.position.clone(),
         offset,
         resolve,
       });
+      this.invalidate();
+    });
+  }
+
+  async animateCheatRemove(blockId: string): Promise<void> {
+    const visual = this.blockVisuals.get(blockId);
+    if (!visual || visual.block.removed) {
+      return;
+    }
+
+    this.createShatterBurst(visual);
+
+    await new Promise<void>((resolve) => {
+      this.animations.set(blockId, {
+        blockId,
+        startTime: this.getNow(),
+        duration: 260,
+        removable: true,
+        origin: visual.group.position.clone(),
+        offset: new THREE.Vector3(0, 0.36, 0),
+        resolve,
+      });
+      this.invalidate();
     });
   }
 
   render(): void {
-    this.updateAnimations();
-    this.controls.update();
+    const now = this.getNow();
+    const hasActiveMotion = this.animations.size > 0 || this.burstFragments.length > 0;
+
+    if (this.animations.size > 0) {
+      this.updateAnimations(now);
+    }
+    if (this.burstFragments.length > 0) {
+      this.updateBurstFragments(now);
+    }
+    if (!this.dirty && !hasActiveMotion) {
+      return;
+    }
     this.renderer.render(this.scene, this.camera);
+    this.dirty = false;
+  }
+
+  advanceTime(ms: number): void {
+    const base = this.manualNow ?? this.getNow();
+    this.manualNow = base + ms;
+    this.invalidate();
+    this.render();
   }
 
   private resize(): void {
@@ -282,6 +344,14 @@ export class GameScene {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.invalidate();
+  }
+
+  private applyRenderQuality(blockCount: number): void {
+    const deviceRatio = window.devicePixelRatio || 1;
+    const ratioCap = blockCount >= 120 ? 1 : blockCount >= 80 ? 1.25 : blockCount >= 48 ? 1.5 : 2;
+    this.renderer.setPixelRatio(Math.min(deviceRatio, ratioCap));
+    this.invalidate();
   }
 
   private fitCamera(dimensions: LevelDimensions): void {
@@ -295,9 +365,17 @@ export class GameScene {
     this.controls.update();
     this.floor.position.y = -dimensions.sizeY * 0.55 - 0.72;
     this.floor.scale.setScalar(Math.max(dimensions.sizeX, dimensions.sizeZ) * 0.9 + 1.8);
+    this.invalidate();
   }
 
   private clearStage(): void {
+    for (const fragment of this.burstFragments) {
+      fragment.mesh.geometry.dispose();
+      fragment.mesh.material.dispose();
+      this.scene.remove(fragment.mesh);
+    }
+    this.burstFragments.length = 0;
+
     for (const visual of this.blockVisuals.values()) {
       visual.group.traverse((node: THREE.Object3D) => {
         if (node instanceof THREE.Mesh) {
@@ -317,6 +395,7 @@ export class GameScene {
 
     this.blockVisuals.clear();
     this.animations.clear();
+    this.invalidate();
   }
 
   private createVisual(block: BlockData): BlockVisual {
@@ -341,8 +420,8 @@ export class GameScene {
         block.sizeZ * CELL_SIZE - 0.02,
       ),
       new THREE.MeshStandardMaterial({
-        color: 0xf6f5f3,
-        roughness: 0.82,
+        color: 0xf8fbff,
+        roughness: 0.54,
         metalness: 0.04,
         side: THREE.DoubleSide,
       }),
@@ -350,7 +429,7 @@ export class GameScene {
 
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(body.geometry),
-      new THREE.LineBasicMaterial({ color: 0x46413e, transparent: true, opacity: 0.36 }),
+      new THREE.LineBasicMaterial({ color: 0x171c23, transparent: true, opacity: 0.42 }),
     );
 
     const group = new THREE.Group();
@@ -386,17 +465,20 @@ export class GameScene {
   private rebuildDecals(visual: BlockVisual, direction: AxisDirection): void {
     for (const decal of visual.decals) {
       visual.group.remove(decal);
-      decal.geometry.dispose();
-      const materials = Array.isArray(decal.material) ? decal.material : [decal.material];
-      for (const material of materials) {
-        material.dispose();
-      }
+      decal.traverse((node: THREE.Object3D) => {
+        if (node instanceof THREE.Mesh) {
+          node.geometry.dispose();
+          const materials = Array.isArray(node.material) ? node.material : [node.material];
+          for (const material of materials) {
+            material.dispose();
+          }
+        }
+      });
     }
     visual.decals = [];
 
-    const blankFaces = new Set(BLANK_FACE_BY_DIRECTION[direction]);
     for (const face of FACE_NAMES) {
-      if (blankFaces.has(face)) {
+      if (!this.isFaceParallelToDirection(face, direction)) {
         continue;
       }
       const decal = this.createDecal(visual.block, face, direction);
@@ -405,21 +487,33 @@ export class GameScene {
     }
   }
 
-  private createDecal(block: BlockData, face: FaceName, direction: AxisDirection): THREE.Mesh {
-    const descriptor = this.getFaceDescriptor(block, face);
-    const geometry = new THREE.PlaneGeometry(descriptor.width, descriptor.height);
-    const material = new THREE.MeshBasicMaterial({
-      map: this.getArrowTexture(face, direction),
-      transparent: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-      toneMapped: false,
-    });
+  private isFaceParallelToDirection(face: FaceName, direction: AxisDirection): boolean {
+    const directionAxis = direction.charAt(1) as 'X' | 'Y' | 'Z';
+    return FACE_AXIS[face] !== directionAxis;
+  }
 
-    const decal = new THREE.Mesh(geometry, material);
+  private createDecal(block: BlockData, face: FaceName, direction: AxisDirection): THREE.Object3D {
+    const descriptor = this.getFaceDescriptor(block, face);
+    const decal = new THREE.Group();
     decal.name = `decal:${block.id}:${face}`;
+
+    const arrowMesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(this.createArrowShape(Math.min(descriptor.width, descriptor.height) * 0.82)),
+      new THREE.MeshBasicMaterial({
+        color: 0x121821,
+        transparent: true,
+        opacity: 0.96,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    arrowMesh.rotation.z = this.getFaceArrowAngle(face, direction);
+    arrowMesh.renderOrder = 3;
+    decal.add(arrowMesh);
 
     const rotation = new THREE.Matrix4().makeBasis(
       descriptor.uAxis.clone().normalize(),
@@ -430,6 +524,27 @@ export class GameScene {
     decal.position.copy(descriptor.normal.clone().multiplyScalar(descriptor.offset));
     decal.renderOrder = 2;
     return decal;
+  }
+
+  private createArrowShape(size: number): THREE.Shape {
+    const length = Math.max(0.16, size);
+    const tailHalf = length * 0.08;
+    const headHalf = length * 0.2;
+    const neck = -length * 0.06;
+    const start = -length * 0.48;
+    const tip = length * 0.5;
+
+    const shape = new THREE.Shape();
+    shape.moveTo(start, -tailHalf);
+    shape.lineTo(neck, -tailHalf);
+    shape.lineTo(neck, -headHalf);
+    shape.lineTo(tip, 0);
+    shape.lineTo(neck, headHalf);
+    shape.lineTo(neck, tailHalf);
+    shape.lineTo(start, tailHalf);
+    shape.lineTo(start + length * 0.09, 0);
+    shape.closePath();
+    return shape;
   }
 
   private getFaceDescriptor(block: BlockData, face: FaceName): {
@@ -503,47 +618,6 @@ export class GameScene {
     }
   }
 
-  private getArrowTexture(face: FaceName, direction: AxisDirection): THREE.CanvasTexture {
-    const key = `${face}:${direction}`;
-    const cached = this.textureCache.get(key);
-    if (cached) {
-      return cached;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      throw new Error('无法创建 2D 贴图画布。');
-    }
-
-    ctx.clearRect(0, 0, 256, 256);
-    ctx.strokeStyle = 'rgba(23, 21, 20, 0.92)';
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 14;
-    ctx.translate(128, 128);
-    ctx.rotate(this.getFaceArrowAngle(face, this.getArrowDirection(direction)));
-
-    ctx.beginPath();
-    ctx.moveTo(-52, 0);
-    ctx.lineTo(38, 0);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(22, -18);
-    ctx.lineTo(52, 0);
-    ctx.lineTo(22, 18);
-    ctx.stroke();
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    this.textureCache.set(key, texture);
-    return texture;
-  }
-
   private getFaceArrowAngle(face: FaceName, direction: AxisDirection): number {
     const descriptor = this.getFaceDescriptor(
       { id: '', x: 0, y: 0, z: 0, sizeX: 1, sizeY: 1, sizeZ: 1, direction, removed: false },
@@ -556,16 +630,6 @@ export class GameScene {
     const u = projection.dot(descriptor.uAxis);
     const v = projection.dot(descriptor.vAxis);
     return Math.atan2(v, u);
-  }
-
-  private getArrowDirection(direction: AxisDirection): AxisDirection {
-    if (direction === '+Y') {
-      return '-Y';
-    }
-    if (direction === '-Y') {
-      return '+Y';
-    }
-    return direction;
   }
 
   private getWorldPosition(block: BlockData): THREE.Vector3 {
@@ -602,12 +666,71 @@ export class GameScene {
     });
   }
 
-  private updateAnimations(): void {
-    if (this.animations.size === 0) {
+  private createShatterBurst(visual: BlockVisual): void {
+    const base = visual.group.position.clone();
+    const tint = visual.body.material.color.clone();
+
+    for (let index = 0; index < 12; index += 1) {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.16, 0.16),
+        new THREE.MeshStandardMaterial({
+          color: tint.clone().offsetHSL((Math.random() - 0.5) * 0.04, 0.08, (Math.random() - 0.5) * 0.08),
+          roughness: 0.5,
+          metalness: 0.04,
+          transparent: true,
+        }),
+      );
+
+      mesh.position.copy(base).add(
+        new THREE.Vector3((Math.random() - 0.5) * 0.46, (Math.random() - 0.5) * 0.46, (Math.random() - 0.5) * 0.46),
+      );
+      this.scene.add(mesh);
+      this.burstFragments.push({
+        mesh,
+        velocity: new THREE.Vector3((Math.random() - 0.5) * 2.6, Math.random() * 2.4 + 0.8, (Math.random() - 0.5) * 2.6),
+        spin: new THREE.Vector3(Math.random() * 5, Math.random() * 5, Math.random() * 5),
+        bornAt: this.getNow(),
+        duration: 320 + Math.random() * 140,
+      });
+    }
+  }
+
+  private updateBurstFragments(now: number): void {
+    if (this.burstFragments.length === 0) {
       return;
     }
 
-    const now = performance.now();
+    this.invalidate();
+
+    for (let index = this.burstFragments.length - 1; index >= 0; index -= 1) {
+      const fragment = this.burstFragments[index];
+      const progress = Math.min(1, (now - fragment.bornAt) / fragment.duration);
+      fragment.mesh.position.addScaledVector(fragment.velocity, 1 / 60);
+      fragment.velocity.y -= 0.08;
+      fragment.mesh.rotation.x += fragment.spin.x * 0.012;
+      fragment.mesh.rotation.y += fragment.spin.y * 0.012;
+      fragment.mesh.rotation.z += fragment.spin.z * 0.012;
+      fragment.mesh.material.opacity = 1 - progress;
+      fragment.mesh.scale.setScalar(1 - progress * 0.35);
+
+      if (progress >= 1) {
+        fragment.mesh.geometry.dispose();
+        fragment.mesh.material.dispose();
+        this.scene.remove(fragment.mesh);
+        this.burstFragments.splice(index, 1);
+      }
+    }
+  }
+
+  private getNow(): number {
+    return this.manualNow ?? performance.now();
+  }
+
+  private updateAnimations(now: number): void {
+    if (this.animations.size === 0) {
+      return;
+    }
+    this.invalidate();
     const finished: string[] = [];
 
     for (const animation of this.animations.values()) {
@@ -655,6 +778,14 @@ export class GameScene {
       this.animations.delete(blockId);
     }
   }
+
+  private invalidate(): void {
+    this.dirty = true;
+  }
+
+  private handleControlsChange = (): void => {
+    this.invalidate();
+  };
 
   private handlePointerDown = (event: PointerEvent): void => {
     this.callbacks.onPointerActivity();

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>占领格子 - Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <canvas id="game-canvas" aria-label="游戏画布"></canvas>
+
+    <header id="hud" class="hud hidden">
+      <button id="hud-settings-button" class="icon-button" type="button">设置</button>
+      <div class="timer-wrap">
+        <span class="timer-label">倒计时</span>
+        <span id="hud-timer" class="timer-value">60</span>
+      </div>
+      <button id="hud-history-button" class="icon-button" type="button">记录</button>
+    </header>
+
+    <section id="hud-scoreboard" class="scoreboard hidden" aria-label="实时领地排名"></section>
+
+    <main id="menu-screen" class="screen">
+      <div class="panel menu-panel">
+        <h1 class="title">占领格子</h1>
+        <p class="subtitle">Neon Pixel Territory Duel</p>
+        <button id="start-button" class="primary-button" type="button">开始游戏</button>
+        <div class="menu-actions">
+          <button id="menu-settings-button" class="ghost-button" type="button">设置</button>
+          <button id="menu-history-button" class="ghost-button" type="button">历史记录</button>
+        </div>
+      </div>
+    </main>
+
+    <section id="settings-modal" class="overlay hidden" aria-hidden="true">
+      <div class="panel modal-panel">
+        <h2>设置</h2>
+        <label class="slider-row">
+          <span>BGM 音量</span>
+          <input id="bgm-volume" type="range" min="0" max="1" step="0.01" value="0.35">
+        </label>
+        <label class="slider-row">
+          <span>SFX 音量</span>
+          <input id="sfx-volume" type="range" min="0" max="1" step="0.01" value="0.7">
+        </label>
+        <label class="check-row">
+          <input id="grid-visibility" type="checkbox" checked>
+          <span>显示网格线</span>
+        </label>
+        <div class="modal-actions">
+          <button id="clear-records-button" class="danger-button" type="button">清空历史记录</button>
+          <button id="close-settings-button" class="primary-button" type="button">关闭</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="history-modal" class="overlay hidden" aria-hidden="true">
+      <div class="panel modal-panel">
+        <h2>历史记录</h2>
+        <ol id="history-list" class="history-list"></ol>
+        <div class="modal-actions">
+          <button id="close-history-button" class="primary-button" type="button">关闭</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="result-modal" class="overlay hidden" aria-hidden="true">
+      <div class="panel modal-panel">
+        <h2 id="result-title">对局结束</h2>
+        <p id="result-subtitle" class="result-subtitle"></p>
+        <ol id="result-ranking" class="ranking-list"></ol>
+        <div class="modal-actions">
+          <button id="play-again-button" class="primary-button" type="button">再来一局</button>
+          <button id="back-menu-button" class="ghost-button" type="button">返回主菜单</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script defer src="src/config.js"></script>
+  <script defer src="src/utils.js"></script>
+  <script defer src="src/systems/board-system.js"></script>
+  <script defer src="src/systems/player-system.js"></script>
+  <script defer src="src/systems/territory-system.js"></script>
+  <script defer src="src/systems/collision-system.js"></script>
+  <script defer src="src/systems/ai-system.js"></script>
+  <script defer src="src/systems/audio-system.js"></script>
+  <script defer src="src/systems/record-system.js"></script>
+  <script defer src="src/systems/result-system.js"></script>
+  <script defer src="src/systems/ui-system.js"></script>
+  <script defer src="src/systems/input-system.js"></script>
+  <script defer src="src/game-loop.js"></script>
+  <script defer src="src/game.js"></script>
+  <script defer src="src/main.js"></script>
+</body>
+</html>

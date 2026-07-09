@@ -1,0 +1,37 @@
+- generic [ref=e3]:
+  - generic [ref=e55]:
+    - banner [ref=e56]:
+      - generic [ref=e57]:
+        - button "暂停" [ref=e58] [cursor=pointer]
+        - generic [ref=e61]: "0"
+      - generic [ref=e62]:
+        - paragraph [ref=e63]: 不限时模式 · 正向计时
+        - generic [ref=e64]: 00:01
+      - generic [ref=e65]: 平台预留区
+    - generic [ref=e66]:
+      - generic [ref=e67]: 不限时模式 · LEVEL 1
+      - generic [ref=e68]: 剩余 13 块
+    - generic [ref=e73]:
+      - generic [ref=e74]: 当前进度
+      - generic [ref=e75]: 0 / 13
+    - generic [ref=e77]:
+      - button "反向 5 次" [ref=e78] [cursor=pointer]:
+        - generic [ref=e79]: 反向
+        - generic [ref=e80]: 5 次
+      - button "消块 1 次 / 3 块" [ref=e81] [cursor=pointer]:
+        - generic [ref=e82]: 消块
+        - generic [ref=e83]: 1 次 / 3 块
+      - button "重置 5 次" [ref=e84] [cursor=pointer]:
+        - generic [ref=e85]: 重置
+        - generic [ref=e86]: 5 次
+    - paragraph [ref=e87]: 拖动旋转，点击方块尝试移除；死局时系统会自动重置。
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - paragraph: ACHIEVEMENTS
+            - heading "成就记录" [level=2]
+          - button "关闭"
+        - generic:
+          - generic: 还没有成就记录，先完成一局再回来看看。
